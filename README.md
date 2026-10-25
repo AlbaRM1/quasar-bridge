@@ -212,13 +212,24 @@ sh scripts/create-cert.sh private/certs "DNS:${BRIDGE_HOST}"
 от колонки. Для исходящего WebSocket требуется доступ к Yandex Uniproxy.
 
 Убедитесь, что активные `QUASAR_*` из окружения не перекрывают отредактированный
-JSON. Запустите сервер с загруженным `runtime.env` и проверьте из разрешённого клиента:
+JSON. **В отдельном терминале**, из каталога проекта, загрузите окружение и
+оставьте сервер работать в foreground:
 
 ```sh
+set -a
+. ./runtime.env
+set +a
 ./bin/quasar-bridge -config config.json
-# В другом терминале:
+```
+
+В основном терминале, где заданы `BRIDGE_HOST` и `BRIDGE_URL`, проверьте endpoint:
+
+```sh
 curl --fail --cacert private/certs/ca.pem "https://${BRIDGE_HOST}:8443/healthz"
 ```
+
+При проверке с другой машины скопируйте туда публичный CA и задайте
+`BRIDGE_HOST` заново: переменные оболочки не переходят между терминалами.
 
 Сертификат сервера действителен 90 дней, CA — 365 дней. Автоматического
 продления нет. При замене CA понадобится обновить доверие на колонке;
@@ -232,8 +243,9 @@ curl --fail --cacert private/certs/ca.pem "https://${BRIDGE_HOST}:8443/healthz"
 и структуру своей firmware. Сценарии применения предполагают возможность
 `mount -o remount,rw /`; наличие root само по себе этого не гарантирует.
 
-В той же оболочке задайте свой SSH-адрес и порт (переменные `BRIDGE_URL` и
-`BRIDGE_HOST` — из предыдущего шага):
+В основном терминале задайте свой SSH-адрес и порт. Здесь должны сохраняться
+`BRIDGE_URL` и `BRIDGE_HOST` из предыдущего шага; сервер продолжает работать
+в отдельном терминале:
 
 ```sh
 SPEAKER_HOST='speaker.example.invalid'  # замените адресом или SSH-алиасом
@@ -427,7 +439,8 @@ LLM может пропустить отдельный светильник пр
 
 Ниже — установка по шаблону для Debian/Ubuntu. Настроенные `config.json`,
 `runtime.env` и `private/certs/server.{pem,key}` должны уже существовать.
-Бинарник должен быть собран для архитектуры Linux-сервера.
+Бинарник должен быть собран для архитектуры Linux-сервера. Перед
+`systemctl enable --now` остановите ручной процесс через Ctrl+C в его терминале.
 
 Если пользователь уже создан, пропустите `useradd`.
 
@@ -442,6 +455,13 @@ sudo install -m 755 bin/quasar-bridge /opt/quasar-bridge/quasar-bridge
 
 Для cross-build
 в команде `install` используйте имя соответствующего Linux-бинарника.
+Удалите или обновите относительные `QUASAR_TLS_CERT`/`QUASAR_TLS_KEY` в `runtime.env`, если
+они там заданы: окружение перекрывает абсолютные значения JSON. Относительные
+пути считаются от `WorkingDirectory`, а не от расположения `config.json`.
+Шаблон unit использует `/opt/quasar-bridge`, `/etc/quasar-bridge` и отдельного
+пользователя; при другой установке измените unit или systemd override.
+
+
 Подготовьте конфиг с абсолютными TLS-путями:
 
 ```sh
@@ -467,12 +487,6 @@ sudo systemctl enable --now quasar-bridge
 sudo systemctl status quasar-bridge --no-pager
 ```
 
-Перед запуском остановите ручной процесс на том же порту. Удалите или
-обновите относительные `QUASAR_TLS_CERT`/`QUASAR_TLS_KEY` в `runtime.env`, если
-они там заданы: окружение перекрывает абсолютные значения JSON. Относительные
-пути считаются от `WorkingDirectory`, а не от расположения `config.json`.
-Шаблон unit использует `/opt/quasar-bridge`, `/etc/quasar-bridge` и отдельного
-пользователя; при другой установке измените unit или systemd override.
 
 При реальном пересечении сети контейнеров и адреса LLM проверьте маршрут
 командой `ip route get LLM_IP`. Необязательный шаблон
