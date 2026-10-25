@@ -66,7 +66,7 @@ func TestRoutingDefaultsAndPartialOverlay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Routing.Rules) != 3 || cfg.Routing.Classifier.TimeoutMS != 8000 || cfg.Routing.Classifier.OnError != "llm" || cfg.Routing.Refusal.Enabled {
+	if len(cfg.Routing.Rules) != 4 || cfg.Routing.Classifier.TimeoutMS != 8000 || cfg.Routing.Classifier.OnError != "llm" || cfg.Routing.Refusal.Enabled {
 		t.Fatalf("partial defaults lost: %+v", cfg.Routing)
 	}
 	empty, err := readConfig(configFile(t, `{"routing":{"rules":[],"default_route":"yandex"}}`))

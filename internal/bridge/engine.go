@@ -18,9 +18,10 @@ type HomeHandler interface {
 	Handle(context.Context, string) (string, error)
 }
 type Engine struct {
-	LLM     Completer
-	Home    HomeHandler
-	routing atomic.Pointer[RoutingPolicy]
+	LLM       Completer
+	Assistant Completer
+	Home      HomeHandler
+	routing   atomic.Pointer[RoutingPolicy]
 }
 
 func (e *Engine) Resolve(ctx context.Context, text string) (Resolution, error) {
@@ -47,10 +48,14 @@ func (e *Engine) Resolve(ctx context.Context, text string) (Resolution, error) {
 }
 func (e *Engine) Fallback(ctx context.Context, text string) (Resolution, error) {
 	r := Resolution{Route: "llm"}
-	if e.LLM == nil {
+	if e.LLM == nil && e.Assistant == nil {
 		return r, errors.New("LLM is not configured")
 	}
-	answer, err := e.LLM.Complete(ctx, []llm.Message{{Role: "system", Content: "Ты голосовой помощник пользователя. Отвечай по-русски, кратко и по существу, обычно до трёх предложений. Ответ будет прочитан вслух: без Markdown и служебных рассуждений. Не заявляй об управлении устройствами или выполнении действий: для этого есть отдельный обработчик умного дома."}, {Role: "user", Content: text}}, false)
+	answerer := e.LLM
+	if e.Assistant != nil {
+		answerer = e.Assistant
+	}
+	answer, err := answerer.Complete(ctx, []llm.Message{{Role: "system", Content: "Ты голосовой помощник пользователя. Отвечай по-русски, кратко и по существу, обычно до трёх предложений. Ответ будет прочитан вслух: без Markdown и служебных рассуждений. Не заявляй об управлении устройствами или выполнении действий: для этого есть отдельный обработчик умного дома."}, {Role: "user", Content: text}}, false)
 	r.Answer = answer
 	return r, err
 }

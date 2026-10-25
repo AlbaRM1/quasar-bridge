@@ -61,7 +61,11 @@ func TestRoutingValidationAndCallerMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	revision := e.RoutingStatus().Revision
-	cfg.Rules[0].Match.ContainsAllGroups[0][0] = "mutated"
+	for i := range cfg.Rules {
+		if cfg.Rules[i].Name == "home_devices" {
+			cfg.Rules[i].Match.ContainsAllGroups[0][0] = "mutated"
+		}
+	}
 	if e.Decide(t.Context(), "выключи свет").Route != "home" || e.RoutingStatus().Revision != revision {
 		t.Fatal("caller mutation changed active policy")
 	}

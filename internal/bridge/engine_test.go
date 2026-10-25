@@ -73,3 +73,45 @@ func TestObservedAliceRefusalVariants(t *testing.T) {
 		}
 	}
 }
+
+func TestAssistantToolsAreIsolatedFromRoutingAndHomePlanning(t *testing.T) {
+	plain, agentCalls := 0, 0
+	e := &Engine{LLM: completionFunc(func(ctx context.Context, m []llm.Message, structured bool) (string, error) {
+		if !structured {
+			t.Fatal("dialogue bypassed assistant")
+		}
+		plain++
+		return `{"route":"llm"}`, nil
+	}), Assistant: completionFunc(func(ctx context.Context, m []llm.Message, structured bool) (string, error) {
+		if structured {
+			t.Fatal("tools used for classification")
+		}
+		agentCalls++
+		return "tool answer", nil
+	})}
+	cfg := DefaultRoutingConfig()
+	cfg.Rules = nil
+	cfg.DefaultRoute = "classify"
+	if err := e.SetRouting(cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.Resolve(t.Context(), "прочитай веб-страницу")
+	if err != nil || got.Answer != "tool answer" || plain != 1 || agentCalls != 1 {
+		t.Fatalf("wrong calls: %+v %v %d %d", got, err, plain, agentCalls)
+	}
+}
+
+func TestHistoryQuestionNeverExecutesQuotedHomeCommand(t *testing.T) {
+	e := &Engine{LLM: completionFunc(func(context.Context, []llm.Message, bool) (string, error) {
+		return "сохранённый ответ", nil
+	}), Home: homeFunc(func(context.Context, string) (string, error) {
+		t.Fatal("history question executed a physical command")
+		return "", nil
+	})}
+	for _, query := range []string{"что я спрашивал, когда просил выключить свет", "найди в истории запрос включи свет", "прочитай страницу https://example.org/ про температуру"} {
+		result, err := e.Resolve(t.Context(), query)
+		if err != nil || result.Route != "llm" {
+			t.Fatalf("query %q: %+v %v", query, result, err)
+		}
+	}
+}

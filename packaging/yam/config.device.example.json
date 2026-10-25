@@ -4,12 +4,28 @@
   "mode": "observe",
   "tls_cert": "",
   "tls_key": "",
-  "allowed_ips": ["127.0.0.1", "::1"],
+  "allowed_ips": [
+    "127.0.0.1",
+    "::1"
+  ],
   "conversation_log": {
     "enabled": false,
     "path": "conversations.jsonl",
     "max_size_mb": 1,
     "max_backups": 2,
     "max_text_chars": 8000
+  },
+  "assistant_tools": {
+    "enabled": false,
+    "web": true,
+    "history": true,
+    "time": true,
+    "timezone": "UTC",
+    "max_rounds": 3,
+    "max_calls": 4,
+    "web_timeout_ms": 8000,
+    "web_max_bytes": 1048576,
+    "web_max_chars": 12000,
+    "history_max_scan_mb": 16
   }
 }

@@ -54,6 +54,7 @@ type Writer struct {
 	failures atomic.Uint64
 }
 
+func (w *Writer) Config() Config   { w.mu.Lock(); defer w.mu.Unlock(); return w.config }
 func (w *Writer) Enabled() bool    { return w != nil && w.enabled.Load() }
 func (w *Writer) Failures() uint64 { return w.failures.Load() }
 func (w *Writer) Configure(c Config) error {

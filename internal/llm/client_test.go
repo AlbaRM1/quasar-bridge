@@ -70,3 +70,43 @@ func TestTransportErrorDoesNotRevealConfiguredURL(t *testing.T) {
 		t.Fatalf("endpoint leaked in error: %v", err)
 	}
 }
+
+func TestChatSupportsToolCallsAndToolResults(t *testing.T) {
+	calls := 0
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body struct {
+			Messages []Message `json:"messages"`
+			Tools    []Tool    `json:"tools"`
+		}
+		if err := json.UnmarshalRead(r.Body, &body); err != nil {
+			t.Error(err)
+			http.Error(w, "bad", 400)
+			return
+		}
+		if len(body.Tools) != 1 || body.Tools[0].Function.Name != "current_time" {
+			t.Error("missing tool definitions")
+		}
+		if calls == 1 {
+			w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"current_time","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`))
+			return
+		}
+		if len(body.Messages) != 3 || body.Messages[2].Role != "tool" || body.Messages[2].ToolCallID != "call-1" {
+			t.Error("missing correlated tool result")
+		}
+		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"Сейчас полдень"},"finish_reason":"stop"}]}`))
+	}))
+	defer s.Close()
+	c := Client{BaseURL: s.URL, Model: "fixture"}
+	tools := []Tool{{Type: "function", Function: Function{Name: "current_time", Parameters: map[string]any{"type": "object"}}}}
+	messages := []Message{{Role: "user", Content: "который час"}}
+	msg, err := c.Chat(t.Context(), messages, tools)
+	if err != nil || len(msg.ToolCalls) != 1 {
+		t.Fatalf("tool call: %+v %v", msg, err)
+	}
+	messages = append(messages, msg, Message{Role: "tool", ToolCallID: msg.ToolCalls[0].ID, Content: `{"hour":12}`})
+	msg, err = c.Chat(t.Context(), messages, tools)
+	if err != nil || msg.Content != "Сейчас полдень" {
+		t.Fatalf("answer: %+v %v", msg, err)
+	}
+}

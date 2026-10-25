@@ -9,11 +9,13 @@ import (
 	"os"
 	"strings"
 
+	"quasarbridge/internal/assistant"
 	"quasarbridge/internal/bridge"
 	"quasarbridge/internal/journal"
 )
 
 type config struct {
+	AssistantTools  assistant.Config     `json:"assistant_tools"`
 	ConversationLog journal.Config       `json:"conversation_log"`
 	Listen          string               `json:"listen"`
 	Upstream        string               `json:"upstream"`
@@ -28,7 +30,7 @@ type config struct {
 }
 
 func readConfig(path string) (config, error) {
-	cfg := config{Routing: bridge.DefaultRoutingConfig(), ConversationLog: journal.DefaultConfig()}
+	cfg := config{Routing: bridge.DefaultRoutingConfig(), ConversationLog: journal.DefaultConfig(), AssistantTools: assistant.DefaultConfig()}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return cfg, errors.New("cannot read configuration file")
@@ -93,6 +95,9 @@ func readConfig(path string) (config, error) {
 		if !validEndpoint(os.Getenv("QUASAR_HOME_MCP_URL"), "http", "https") {
 			return cfg, errors.New("hybrid mode requires QUASAR_HOME_MCP_URL")
 		}
+	}
+	if err := cfg.AssistantTools.Validate(); err != nil {
+		return cfg, err
 	}
 	if err := cfg.ConversationLog.Validate(); err != nil {
 		return cfg, err

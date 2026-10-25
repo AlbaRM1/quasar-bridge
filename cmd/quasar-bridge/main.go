@@ -19,6 +19,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"quasarbridge/internal/assistant"
 	"quasarbridge/internal/bridge"
 	"quasarbridge/internal/home"
 	"quasarbridge/internal/journal"
@@ -119,9 +120,21 @@ func main() {
 			slog.Info("frame", attrs...)
 		}
 	}}
+	logs := new(journal.Writer)
 	lc := &llm.Client{BaseURL: cfg.LLMBaseURL, Model: cfg.LLMModel, APIKey: os.Getenv("QUASAR_LLM_API_KEY")}
 	hc := &home.Controller{Tools: &home.MCP{URL: os.Getenv("QUASAR_HOME_MCP_URL")}, Planner: lc}
 	engine := &bridge.Engine{LLM: lc, Home: hc}
+	if cfg.AssistantTools.Enabled {
+		source := func() journal.Config {
+			c := logs.Config()
+			if c.Path == "" {
+				return cfg.ConversationLog
+			}
+			return c
+		}
+		tools := &assistant.Tools{Config: cfg.AssistantTools, JournalConfig: source, WebReader: assistant.NewWebReader(cfg.AssistantTools)}
+		engine.Assistant = &assistant.Agent{Client: lc, Tools: tools, MaxRounds: cfg.AssistantTools.MaxRounds, MaxCalls: cfg.AssistantTools.MaxCalls}
+	}
 	if err := engine.SetRouting(cfg.Routing); err != nil {
 		slog.Error("routing rejected", "error", err)
 		os.Exit(1)
@@ -157,7 +170,6 @@ func main() {
 		fmt.Println(string(data))
 		return
 	}
-	logs := new(journal.Writer)
 	if err := logs.Configure(cfg.ConversationLog); err != nil {
 		slog.Error("conversation log rejected", "error", err)
 		os.Exit(1)
@@ -194,7 +206,7 @@ func main() {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		state := engine.RoutingStatus()
-		data, _ := json.Marshal(map[string]any{"status": "ok", "mode": cfg.Mode, "client_frames": clientCount.Load(), "server_frames": serverCount.Load(), "routing_revision": state.Revision, "routing_rules": state.ActiveRules, "conversation_log_enabled": logs.Enabled(), "conversation_log_failures": logs.Failures()})
+		data, _ := json.Marshal(map[string]any{"status": "ok", "mode": cfg.Mode, "client_frames": clientCount.Load(), "server_frames": serverCount.Load(), "routing_revision": state.Revision, "routing_rules": state.ActiveRules, "conversation_log_enabled": logs.Enabled(), "conversation_log_failures": logs.Failures(), "assistant_tools_enabled": cfg.AssistantTools.Enabled})
 		_, _ = w.Write(data)
 	})
 	mux.Handle("/uni.ws", proxy)
