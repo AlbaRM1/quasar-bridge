@@ -1,0 +1,14 @@
+# Optional: install only when a route overlap actually affects the LLM endpoint.
+[Unit]
+Description=Optional route to the configured LLM host
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/quasar-bridge/route.env
+ExecStart=/usr/sbin/ip route replace ${QUASAR_ROUTE_DESTINATION} via ${QUASAR_ROUTE_GATEWAY} dev ${QUASAR_ROUTE_INTERFACE}
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

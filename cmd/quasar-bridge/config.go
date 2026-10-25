@@ -1,0 +1,102 @@
+package main
+
+import (
+	"encoding/json/v2"
+	"errors"
+	"net"
+	"net/netip"
+	"net/url"
+	"os"
+	"strings"
+)
+
+type config struct {
+	Listen       string   `json:"listen"`
+	Upstream     string   `json:"upstream"`
+	TLSCert      string   `json:"tls_cert"`
+	TLSKey       string   `json:"tls_key"`
+	AllowedIPs   []string `json:"allowed_ips"`
+	Mode         string   `json:"mode"`
+	LLMBaseURL   string   `json:"llm_base_url"`
+	LLMModel     string   `json:"llm_model"`
+	HomeWarmArea string   `json:"home_warm_area"`
+}
+
+func readConfig(path string) (config, error) {
+	var cfg config
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return cfg, errors.New("cannot read configuration file")
+	}
+	if json.Unmarshal(raw, &cfg, json.RejectUnknownMembers(true)) != nil {
+		return cfg, errors.New("invalid configuration JSON")
+	}
+	for name, target := range map[string]*string{
+		"QUASAR_LISTEN": &cfg.Listen, "QUASAR_UPSTREAM": &cfg.Upstream,
+		"QUASAR_TLS_CERT": &cfg.TLSCert, "QUASAR_TLS_KEY": &cfg.TLSKey,
+		"QUASAR_MODE": &cfg.Mode, "QUASAR_LLM_BASE_URL": &cfg.LLMBaseURL,
+		"QUASAR_LLM_MODEL": &cfg.LLMModel, "QUASAR_HOME_WARM_AREA": &cfg.HomeWarmArea,
+	} {
+		if value, ok := os.LookupEnv(name); ok {
+			*target = value
+		}
+	}
+	if value, ok := os.LookupEnv("QUASAR_ALLOWED_IPS"); ok {
+		cfg.AllowedIPs = nil
+		for item := range strings.SplitSeq(value, ",") {
+			if item = strings.TrimSpace(item); item != "" {
+				cfg.AllowedIPs = append(cfg.AllowedIPs, item)
+			}
+		}
+	}
+	if cfg.Listen == "" {
+		cfg.Listen = "localhost:8443"
+	}
+	if cfg.Upstream == "" {
+		cfg.Upstream = "wss://uniproxy.alice.yandex.net/uni.ws"
+	}
+	if cfg.Mode == "" {
+		cfg.Mode = "observe"
+	}
+	if _, _, err := net.SplitHostPort(cfg.Listen); err != nil {
+		return cfg, errors.New("listen must include host and port")
+	}
+	if cfg.Mode != "observe" && cfg.Mode != "hybrid" {
+		return cfg, errors.New("mode must be observe or hybrid")
+	}
+	if !validEndpoint(cfg.Upstream, "ws", "wss") {
+		return cfg, errors.New("invalid upstream URL")
+	}
+	if (cfg.TLSCert == "") != (cfg.TLSKey == "") {
+		return cfg, errors.New("TLS certificate and key must be set together")
+	}
+	for _, ip := range cfg.AllowedIPs {
+		if _, err := netip.ParseAddr(ip); err != nil {
+			return cfg, errors.New("allowed_ips must contain IP addresses")
+		}
+	}
+	if cfg.LLMBaseURL != "" && !validEndpoint(cfg.LLMBaseURL, "http", "https") {
+		return cfg, errors.New("invalid LLM URL")
+	}
+	if cfg.Mode == "hybrid" {
+		if cfg.LLMBaseURL == "" || cfg.LLMModel == "" {
+			return cfg, errors.New("hybrid mode requires LLM URL and model")
+		}
+		if !validEndpoint(os.Getenv("QUASAR_HOME_MCP_URL"), "http", "https") {
+			return cfg, errors.New("hybrid mode requires QUASAR_HOME_MCP_URL")
+		}
+	}
+	return cfg, nil
+}
+func validEndpoint(raw string, schemes ...string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
+		return false
+	}
+	for _, scheme := range schemes {
+		if u.Scheme == scheme {
+			return true
+		}
+	}
+	return false
+}

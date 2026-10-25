@@ -1,0 +1,184 @@
+package main
+
+import (
+	"context"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	"github.com/coder/websocket"
+
+	"quasarbridge/internal/bridge"
+	"quasarbridge/internal/home"
+	"quasarbridge/internal/llm"
+	"quasarbridge/internal/wire"
+)
+
+func main() {
+	path := flag.String("config", "config.json", "configuration file")
+	query := flag.String("query", "", "run one text query for backend diagnostics")
+	check := flag.Bool("check-backends", false, "check LLM and Home Assistant connectivity")
+	flag.Parse()
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	slog.SetDefault(logger)
+	cfg, err := readConfig(*path)
+	if err != nil {
+		slog.Error("configuration rejected", "error", err)
+		os.Exit(1)
+	}
+
+	var clientCount, serverCount atomic.Int64
+	proxy := &bridge.Proxy{Upstream: cfg.Upstream, Observer: func(direction string, kind websocket.MessageType, data []byte) {
+		d := wire.ClientToServer
+		var count int64
+		if direction == "server" {
+			d = wire.ServerToClient
+			count = serverCount.Add(1)
+		} else {
+			count = clientCount.Add(1)
+		}
+		frame := wire.Decode(data, d)
+		name := frame.Kind()
+		if (name != "opaque" && name != "AsrResult") || count <= 8 || count%100 == 0 {
+			attrs := []any{"direction", direction, "transport_type", int(kind), "event", name, "bytes", len(data), "count", count}
+			if len(frame.Prefix) == 4 {
+				attrs = append(attrs, "prefix_tag", string(frame.Prefix))
+			}
+			if frame.Client != nil {
+				e := frame.Client.GetEvent()
+				if req := e.GetTextInput(); req != nil {
+					attrs = append(attrs, "wait_client_approval", req.GetRequest().GetUniproxyOptions().GetWaitClientApproval())
+				}
+				if req := e.GetVoiceInput(); req != nil {
+					attrs = append(attrs, "wait_client_approval", req.GetRequest().GetUniproxyOptions().GetWaitClientApproval())
+				}
+			}
+			if name == "opaque" && count <= 8 {
+				attrs = append(attrs, "framing", wire.Probe(data, d))
+			}
+			if name == "opaque" && kind == websocket.MessageText {
+				// Keys only: never emit request values, audio or authentication.
+				var obj map[string]jsontext.Value
+				if json.Unmarshal(data, &obj) == nil {
+					var keys []string
+					for key := range obj {
+						if len(key) < 40 && !strings.ContainsAny(key, "\n\r") {
+							keys = append(keys, key)
+						}
+					}
+					attrs = append(attrs, "json_keys", keys)
+				}
+			}
+			slog.Info("frame", attrs...)
+		}
+	}}
+	lc := &llm.Client{BaseURL: cfg.LLMBaseURL, Model: cfg.LLMModel, APIKey: os.Getenv("QUASAR_LLM_API_KEY")}
+	hc := &home.Controller{Tools: &home.MCP{URL: os.Getenv("QUASAR_HOME_MCP_URL")}, Planner: lc}
+	engine := &bridge.Engine{LLM: lc, Home: hc}
+	if *query != "" || *check {
+		ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
+		defer cancel()
+		if *check {
+			_, err := lc.Complete(ctx, []llm.Message{{Role: "user", Content: "Ответь одним словом: связь"}}, false)
+			if err != nil {
+				slog.Error("LLM check failed")
+				os.Exit(1)
+			}
+			entities, err := hc.Entities(ctx)
+			if err != nil {
+				slog.Error("Home Assistant check failed", "error", err)
+				os.Exit(1)
+			}
+			fmt.Printf("LLM: ok; Home Assistant: %d entities\n", len(entities))
+			return
+		}
+		r, err := engine.Resolve(ctx, *query)
+		if err != nil {
+			slog.Error("query failed", "route", r.Route, "error", err)
+			os.Exit(1)
+		}
+		data, _ := json.Marshal(r)
+		fmt.Println(string(data))
+		return
+	}
+	if cfg.Mode == "hybrid" {
+		if cfg.HomeWarmArea != "" {
+			warmCtx, warmCancel := context.WithCancel(context.Background())
+			defer warmCancel()
+			go func() {
+				for {
+					ctx, cancel := context.WithTimeout(warmCtx, 90*time.Second)
+					err := hc.Warm(ctx, cfg.HomeWarmArea)
+					cancel()
+					slog.Info("home_warm", "ready", err == nil)
+					select {
+					case <-warmCtx.Done():
+						return
+					case <-time.After(time.Minute):
+					}
+				}
+			}()
+		}
+
+		proxy.NewSession = func(ctx context.Context, up, down bridge.Sender) bridge.Session {
+			n := bridge.NewNative(ctx, up, down, engine)
+			n.GateText = false
+
+			return n
+		}
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		data, _ := json.Marshal(map[string]any{"status": "ok", "mode": cfg.Mode, "client_frames": clientCount.Load(), "server_frames": serverCount.Load()})
+		_, _ = w.Write(data)
+	})
+	mux.Handle("/uni.ws", proxy)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(cfg.AllowedIPs) > 0 {
+			ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+			allowed := false
+			for _, candidate := range cfg.AllowedIPs {
+				if ip == candidate {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+		}
+		mux.ServeHTTP(w, r)
+	})
+	server := &http.Server{Addr: cfg.Listen, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	}()
+	slog.Info("listening", "address", cfg.Listen, "mode", cfg.Mode)
+	if cfg.TLSCert != "" && cfg.TLSKey != "" {
+		err = server.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey)
+	} else {
+		err = server.ListenAndServe()
+	}
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		slog.Error("listener failed")
+		os.Exit(1)
+	}
+}

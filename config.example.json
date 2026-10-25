@@ -1,0 +1,11 @@
+{
+  "listen": "localhost:8443",
+  "upstream": "wss://uniproxy.alice.yandex.net/uni.ws",
+  "mode": "hybrid",
+  "tls_cert": "certs/server.pem",
+  "tls_key": "certs/server.key",
+  "allowed_ips": [],
+  "llm_base_url": "https://llm.example.invalid/v1",
+  "llm_model": "your-model",
+  "home_warm_area": ""
+}
