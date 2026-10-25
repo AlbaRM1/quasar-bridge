@@ -10,23 +10,25 @@ import (
 	"strings"
 
 	"quasarbridge/internal/bridge"
+	"quasarbridge/internal/journal"
 )
 
 type config struct {
-	Listen       string               `json:"listen"`
-	Upstream     string               `json:"upstream"`
-	TLSCert      string               `json:"tls_cert"`
-	TLSKey       string               `json:"tls_key"`
-	AllowedIPs   []string             `json:"allowed_ips"`
-	Mode         string               `json:"mode"`
-	LLMBaseURL   string               `json:"llm_base_url"`
-	LLMModel     string               `json:"llm_model"`
-	HomeWarmArea string               `json:"home_warm_area"`
-	Routing      bridge.RoutingConfig `json:"routing"`
+	ConversationLog journal.Config       `json:"conversation_log"`
+	Listen          string               `json:"listen"`
+	Upstream        string               `json:"upstream"`
+	TLSCert         string               `json:"tls_cert"`
+	TLSKey          string               `json:"tls_key"`
+	AllowedIPs      []string             `json:"allowed_ips"`
+	Mode            string               `json:"mode"`
+	LLMBaseURL      string               `json:"llm_base_url"`
+	LLMModel        string               `json:"llm_model"`
+	HomeWarmArea    string               `json:"home_warm_area"`
+	Routing         bridge.RoutingConfig `json:"routing"`
 }
 
 func readConfig(path string) (config, error) {
-	cfg := config{Routing: bridge.DefaultRoutingConfig()}
+	cfg := config{Routing: bridge.DefaultRoutingConfig(), ConversationLog: journal.DefaultConfig()}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return cfg, errors.New("cannot read configuration file")
@@ -51,6 +53,9 @@ func readConfig(path string) (config, error) {
 				cfg.AllowedIPs = append(cfg.AllowedIPs, item)
 			}
 		}
+	}
+	if len(cfg.AllowedIPs) == 0 {
+		cfg.AllowedIPs = nil
 	}
 	if cfg.Listen == "" {
 		cfg.Listen = "localhost:8443"
@@ -88,6 +93,9 @@ func readConfig(path string) (config, error) {
 		if !validEndpoint(os.Getenv("QUASAR_HOME_MCP_URL"), "http", "https") {
 			return cfg, errors.New("hybrid mode requires QUASAR_HOME_MCP_URL")
 		}
+	}
+	if err := cfg.ConversationLog.Validate(); err != nil {
+		return cfg, err
 	}
 	if _, err := bridge.CompileRouting(cfg.Routing); err != nil {
 		return cfg, err

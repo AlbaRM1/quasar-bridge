@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"quasarbridge/internal/journal"
 	"strings"
 	"testing"
 	"time"
@@ -107,7 +110,15 @@ func TestNativeRoutesBeforeCloudExecutionAndCorrelatesTTS(t *testing.T) {
 				}
 				return Resolution{Route: route, Answer: "Ответ своей модели"}, nil
 			})
-			proxy := &Proxy{Upstream: "ws" + strings.TrimPrefix(upstream.URL, "http"), NewSession: func(ctx context.Context, up, down Sender) Session {
+			log := new(journal.Writer)
+			defer log.Close()
+			logConfig := journal.DefaultConfig()
+			logConfig.Enabled = true
+			logConfig.Path = filepath.Join(t.TempDir(), "turns.jsonl")
+			if err := log.Configure(logConfig); err != nil {
+				t.Fatal(err)
+			}
+			proxy := &Proxy{Journal: log, Upstream: "ws" + strings.TrimPrefix(upstream.URL, "http"), NewSession: func(ctx context.Context, up, down Sender) Session {
 				n := NewNative(ctx, up, down, resolver)
 
 				return n
@@ -159,6 +170,24 @@ func TestNativeRoutesBeforeCloudExecutionAndCorrelatesTTS(t *testing.T) {
 						t.Fatal("audio altered")
 					}
 				}
+			}
+			// The actual downstream sender must record both cloud and generated replies.
+			var logged string
+			deadline := time.Now().Add(time.Second)
+			for time.Now().Before(deadline) {
+				raw, _ := os.ReadFile(logConfig.Path)
+				logged = string(raw)
+				if strings.Contains(logged, `"event":"response"`) {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			wantRoute := route
+			if route == "no_continue" {
+				wantRoute = "yandex"
+			}
+			if !strings.Contains(logged, `"event":"request"`) || !strings.Contains(logged, `"route":"`+wantRoute+`"`) || !strings.Contains(logged, `"event":"response"`) || strings.Contains(logged, "fixture-audio") {
+				t.Fatalf("missing conversation or audio leaked: %s", logged)
 			}
 			select {
 			case msg := <-errCh:

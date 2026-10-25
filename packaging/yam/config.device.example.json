@@ -1,0 +1,15 @@
+{
+  "listen": "127.0.0.1:8443",
+  "upstream": "wss://uniproxy.alice.yandex.net/uni.ws",
+  "mode": "observe",
+  "tls_cert": "",
+  "tls_key": "",
+  "allowed_ips": ["127.0.0.1", "::1"],
+  "conversation_log": {
+    "enabled": false,
+    "path": "conversations.jsonl",
+    "max_size_mb": 1,
+    "max_backups": 2,
+    "max_text_chars": 8000
+  }
+}

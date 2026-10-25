@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"quasarbridge/internal/journal"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 )
 
 type Proxy struct {
+	Journal    *journal.Writer
 	Upstream   string
 	Observer   func(direction string, kind websocket.MessageType, data []byte)
 	NewSession func(context.Context, Sender, Sender) Session
@@ -68,8 +70,26 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
 	defer cancel()
 	var session Session
+	var trace *conversation
+	downSend := Sender(down.Write)
+	if p.Journal != nil {
+		trace = newConversation(p.Journal)
+		if p.NewSession != nil {
+			trace.initialRoute = ""
+		}
+		downSend = func(ctx context.Context, k websocket.MessageType, data []byte) error {
+			if err := down.Write(ctx, k, data); err != nil {
+				return err
+			}
+			trace.server(data, true)
+			return nil
+		}
+	}
 	if p.NewSession != nil {
-		session = p.NewSession(ctx, up.Write, down.Write)
+		session = p.NewSession(ctx, up.Write, downSend)
+		if n, ok := session.(*Native); ok && trace != nil {
+			n.OnRoute = trace.route
+		}
 		defer session.Close()
 	}
 	copyMessages := func(dst, src *websocket.Conn, direction string) {
@@ -78,6 +98,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			kind, data, err := src.Read(ctx)
 			if err != nil {
 				return
+			}
+			if trace != nil {
+				if direction == "client" {
+					trace.client(data)
+				} else {
+					trace.server(data, false)
+				}
 			}
 			if p.Observer != nil {
 				p.Observer(direction, kind, data)
@@ -93,7 +120,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 				continue
 			}
-			if err := dst.Write(ctx, kind, data); err != nil {
+			send := Sender(dst.Write)
+			if direction == "server" {
+				send = downSend
+			}
+			if err := send(ctx, kind, data); err != nil {
 				return
 			}
 		}

@@ -4,5 +4,12 @@
   "mode": "observe",
   "tls_cert": "certs/server.pem",
   "tls_key": "certs/server.key",
-  "allowed_ips": []
+  "allowed_ips": [],
+  "conversation_log": {
+    "enabled": false,
+    "path": "runtime/conversations.jsonl",
+    "max_size_mb": 10,
+    "max_backups": 3,
+    "max_text_chars": 16000
+  }
 }

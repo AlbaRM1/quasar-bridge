@@ -5,9 +5,10 @@ import (
 	"reflect"
 
 	"quasarbridge/internal/bridge"
+	"quasarbridge/internal/journal"
 )
 
-func reloadRouting(path string, initial config, engine *bridge.Engine) error {
+func reloadRouting(path string, initial config, engine *bridge.Engine, logs ...*journal.Writer) error {
 	next, err := readConfig(path)
 	if err != nil {
 		return err
@@ -17,8 +18,17 @@ func reloadRouting(path string, initial config, engine *bridge.Engine) error {
 	a, b := initial, next
 	a.Routing = bridge.RoutingConfig{}
 	b.Routing = bridge.RoutingConfig{}
+	if len(logs) > 0 {
+		a.ConversationLog = journal.Config{}
+		b.ConversationLog = journal.Config{}
+	}
 	if !reflect.DeepEqual(a, b) {
 		return errors.New("non-routing settings changed; restart required")
+	}
+	if len(logs) > 0 {
+		if err := logs[0].Configure(next.ConversationLog); err != nil {
+			return err
+		}
 	}
 	return engine.SetRouting(next.Routing)
 }

@@ -21,6 +21,7 @@ import (
 
 	"quasarbridge/internal/bridge"
 	"quasarbridge/internal/home"
+	"quasarbridge/internal/journal"
 	"quasarbridge/internal/llm"
 	"quasarbridge/internal/wire"
 )
@@ -31,7 +32,19 @@ func main() {
 	check := flag.Bool("check-backends", false, "check LLM and Home Assistant connectivity")
 	route := flag.String("route", "", "explain a route without executing home actions or generating an answer")
 	validate := flag.Bool("check-config", false, "validate configuration without contacting backends")
+	speakerAction := flag.String("speaker-endpoint", "", "apply or rollback the on-device loopback endpoint (requires writable firmware)")
+	speakerConfig := flag.String("speaker-config", "/system/vendor/quasar/quasar.cfg", "firmware configuration path")
+	speakerBackup := flag.String("speaker-backup", "/data/opt/quasar-bridge/endpoint-backup.json", "persistent endpoint backup")
+	speakerURL := flag.String("speaker-url", "ws://127.0.0.1:8443/uni.ws", "on-device bridge URL")
 	flag.Parse()
+	if *speakerAction != "" {
+		if err := setSpeakerEndpoint(*speakerConfig, *speakerBackup, *speakerURL, *speakerAction); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println("Speaker endpoint updated; restart the voice service to apply")
+		return
+	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
 	cfg, err := readConfig(*path)
@@ -144,6 +157,13 @@ func main() {
 		fmt.Println(string(data))
 		return
 	}
+	logs := new(journal.Writer)
+	if err := logs.Configure(cfg.ConversationLog); err != nil {
+		slog.Error("conversation log rejected", "error", err)
+		os.Exit(1)
+	}
+	defer logs.Close()
+	proxy.Journal = logs
 	if cfg.Mode == "hybrid" {
 		if cfg.HomeWarmArea != "" {
 			warmCtx, warmCancel := context.WithCancel(context.Background())
@@ -174,7 +194,7 @@ func main() {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		state := engine.RoutingStatus()
-		data, _ := json.Marshal(map[string]any{"status": "ok", "mode": cfg.Mode, "client_frames": clientCount.Load(), "server_frames": serverCount.Load(), "routing_revision": state.Revision, "routing_rules": state.ActiveRules})
+		data, _ := json.Marshal(map[string]any{"status": "ok", "mode": cfg.Mode, "client_frames": clientCount.Load(), "server_frames": serverCount.Load(), "routing_revision": state.Revision, "routing_rules": state.ActiveRules, "conversation_log_enabled": logs.Enabled(), "conversation_log_failures": logs.Failures()})
 		_, _ = w.Write(data)
 	})
 	mux.Handle("/uni.ws", proxy)
@@ -207,7 +227,7 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-reloads:
-				if err := reloadRouting(*path, cfg, engine); err != nil {
+				if err := reloadRouting(*path, cfg, engine, logs); err != nil {
 					slog.Warn("routing_reload_rejected", "error", err)
 					continue
 				}

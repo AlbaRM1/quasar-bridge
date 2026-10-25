@@ -29,3 +29,8 @@ quasar.cfg*
 
 __pycache__/
 *.pyc
+
+/dist/
+*.yap
+*.jsonl
+*.jsonl.*

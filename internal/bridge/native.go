@@ -66,6 +66,7 @@ type Native struct {
 	streams       map[uint32]*nativeRequest
 	blocked       map[uint32]*nativeRequest
 	wg            sync.WaitGroup
+	OnRoute       func(id, route string)
 	GateText      bool
 	DecisionDelay time.Duration
 }
@@ -329,6 +330,9 @@ func (n *Native) Server(ctx context.Context, k websocket.MessageType, data []byt
 
 		if resolver, ok := n.resolver.(FallbackResolver); ok && n.isRefusal(text) {
 			p.local = true
+			if n.OnRoute != nil {
+				n.OnRoute(p.id, "llm")
+			}
 			p.ttsID = newID()
 			n.tts[p.ttsID] = p
 			query := p.text
@@ -419,6 +423,9 @@ func (n *Native) maybeResolve(p *nativeRequest) {
 		if p.canceled {
 			n.mu.Unlock()
 			return
+		}
+		if n.OnRoute != nil {
+			n.OnRoute(p.id, result.Route)
 		}
 		if result.Route == "yandex" {
 			p.cloud = true

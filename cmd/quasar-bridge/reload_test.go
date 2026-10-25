@@ -4,7 +4,10 @@ import (
 	"os"
 	"testing"
 
+	"encoding/json/v2"
+	"path/filepath"
 	"quasarbridge/internal/bridge"
+	"quasarbridge/internal/journal"
 )
 
 func TestReloadRoutingKeepsLastGoodSnapshot(t *testing.T) {
@@ -45,5 +48,48 @@ func TestReloadRoutingKeepsLastGoodSnapshot(t *testing.T) {
 		if engine.RoutingStatus().Revision != good {
 			t.Fatal("bad reload changed policy")
 		}
+	}
+}
+
+func TestReloadJournalKeepsWorkingPolicyOnOpenFailure(t *testing.T) {
+	path := configFile(t, `{"routing":{"rules":[],"default_route":"yandex"}}`)
+	initial, err := readConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := new(bridge.Engine)
+	engine.SetRouting(initial.Routing)
+	logs := new(journal.Writer)
+	defer logs.Close()
+	logs.Configure(initial.ConversationLog)
+	next := initial
+	next.ConversationLog.Enabled = true
+	next.ConversationLog.Path = filepath.Join(t.TempDir(), "turns.jsonl")
+	write := func() {
+		t.Helper()
+		raw, err := json.Marshal(next)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write()
+	if err := reloadRouting(path, initial, engine, logs); err != nil {
+		t.Fatal(err)
+	}
+	if !logs.Enabled() {
+		t.Fatal("not enabled")
+	}
+	old := engine.RoutingStatus().Revision
+	next.Routing.DefaultRoute = "llm"
+	next.ConversationLog.Path = filepath.Dir(next.ConversationLog.Path)
+	write()
+	if reloadRouting(path, initial, engine, logs) == nil {
+		t.Fatal("bad path accepted")
+	}
+	if !logs.Enabled() || engine.RoutingStatus().Revision != old {
+		t.Fatal("failed reload changed good state")
 	}
 }

@@ -134,5 +134,12 @@
         "не умею"
       ]
     }
+  },
+  "conversation_log": {
+    "enabled": false,
+    "path": "runtime/conversations.jsonl",
+    "max_size_mb": 10,
+    "max_backups": 3,
+    "max_text_chars": 16000
   }
 }

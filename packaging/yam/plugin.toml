@@ -1,0 +1,13 @@
+id = "quasar-bridge"
+name = "Quasar Bridge"
+version = "0.2.0"
+entry = "start.sh"
+description = "Selective Quasar proxy with local LLM, Home Assistant and opt-in conversation journal"
+permissions = ["exec"]
+
+[launch]
+kind = "binary"
+mode = "service"
+path = "start.sh"
+interpreter = "sh"
+args = []
