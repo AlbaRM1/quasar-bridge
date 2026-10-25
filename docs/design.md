@@ -47,3 +47,11 @@ API destination; a separate systemd unit persists it without changing Docker.
 
 Fixture verification, live text protocol checks and physical voice evidence
 must be reported separately. See validation.md for what was actually tested.
+
+Routing configuration is compiled into an immutable policy and atomically
+published through the shared Engine. An absent routing object preserves legacy
+defaults; explicit rule arrays replace the built-in array. SIGHUP reloads only
+routing and rejects changed deployment fields. Failed reads/validation retain
+the last good snapshot. Existing sessions share the Engine; in-flight classifier
+calls retain their snapshot, while later decisions and refusal checks use the
+current policy. Health reports a consistent revision/active-rule count.

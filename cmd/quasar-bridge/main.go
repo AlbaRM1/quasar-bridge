@@ -29,6 +29,8 @@ func main() {
 	path := flag.String("config", "config.json", "configuration file")
 	query := flag.String("query", "", "run one text query for backend diagnostics")
 	check := flag.Bool("check-backends", false, "check LLM and Home Assistant connectivity")
+	route := flag.String("route", "", "explain a route without executing home actions or generating an answer")
+	validate := flag.Bool("check-config", false, "validate configuration without contacting backends")
 	flag.Parse()
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
@@ -38,6 +40,27 @@ func main() {
 		os.Exit(1)
 	}
 
+	diagnostics := 0
+	if *query != "" {
+		diagnostics++
+	}
+	if *route != "" {
+		diagnostics++
+	}
+	if *check {
+		diagnostics++
+	}
+	if *validate {
+		diagnostics++
+	}
+	if diagnostics > 1 {
+		slog.Error("diagnostic flags are mutually exclusive")
+		os.Exit(2)
+	}
+	if *validate {
+		fmt.Println("configuration is valid")
+		return
+	}
 	var clientCount, serverCount atomic.Int64
 	proxy := &bridge.Proxy{Upstream: cfg.Upstream, Observer: func(direction string, kind websocket.MessageType, data []byte) {
 		d := wire.ClientToServer
@@ -86,9 +109,18 @@ func main() {
 	lc := &llm.Client{BaseURL: cfg.LLMBaseURL, Model: cfg.LLMModel, APIKey: os.Getenv("QUASAR_LLM_API_KEY")}
 	hc := &home.Controller{Tools: &home.MCP{URL: os.Getenv("QUASAR_HOME_MCP_URL")}, Planner: lc}
 	engine := &bridge.Engine{LLM: lc, Home: hc}
-	if *query != "" || *check {
+	if err := engine.SetRouting(cfg.Routing); err != nil {
+		slog.Error("routing rejected", "error", err)
+		os.Exit(1)
+	}
+	if *query != "" || *check || *route != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
 		defer cancel()
+		if *route != "" {
+			data, _ := json.Marshal(engine.Decide(ctx, *route))
+			fmt.Println(string(data))
+			return
+		}
 		if *check {
 			_, err := lc.Complete(ctx, []llm.Message{{Role: "user", Content: "Ответь одним словом: связь"}}, false)
 			if err != nil {
@@ -141,7 +173,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		data, _ := json.Marshal(map[string]any{"status": "ok", "mode": cfg.Mode, "client_frames": clientCount.Load(), "server_frames": serverCount.Load()})
+		state := engine.RoutingStatus()
+		data, _ := json.Marshal(map[string]any{"status": "ok", "mode": cfg.Mode, "client_frames": clientCount.Load(), "server_frames": serverCount.Load(), "routing_revision": state.Revision, "routing_rules": state.ActiveRules})
 		_, _ = w.Write(data)
 	})
 	mux.Handle("/uni.ws", proxy)
@@ -165,13 +198,31 @@ func main() {
 	server := &http.Server{Addr: cfg.Listen, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	reloads := make(chan os.Signal, 1)
+	signal.Notify(reloads, syscall.SIGHUP)
+	defer signal.Stop(reloads)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-reloads:
+				if err := reloadRouting(*path, cfg, engine); err != nil {
+					slog.Warn("routing_reload_rejected", "error", err)
+					continue
+				}
+				state := engine.RoutingStatus()
+				slog.Info("routing_reloaded", "revision", state.Revision, "active_rules", state.ActiveRules)
+			}
+		}
+	}()
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
 	}()
-	slog.Info("listening", "address", cfg.Listen, "mode", cfg.Mode)
+	slog.Info("listening", "address", cfg.Listen, "mode", cfg.Mode, "routing_revision", engine.RoutingStatus().Revision)
 	if cfg.TLSCert != "" && cfg.TLSKey != "" {
 		err = server.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey)
 	} else {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,6 +27,7 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
+	"quasarbridge/internal/llm"
 	"quasarbridge/internal/wire"
 )
 
@@ -361,5 +363,104 @@ func TestRefusalReplacementKeepsExecutorDirectives(t *testing.T) {
 				t.Fatal("incorrect directive substitution policy")
 			}
 		})
+	}
+}
+
+func TestExistingNativeSessionUsesReloadedRefusalPolicy(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	up := make(chan []byte, 16)
+	down := make(chan []byte, 16)
+	engine := &Engine{LLM: completionFunc(func(context.Context, []llm.Message, bool) (string, error) {
+		return "Локальный ответ", nil
+	})}
+	n := NewNative(ctx, func(_ context.Context, _ websocket.MessageType, b []byte) error { up <- b; return nil }, func(_ context.Context, _ websocket.MessageType, b []byte) error { down <- b; return nil }, engine)
+	defer n.Close()
+	for i, enabled := range []bool{false, true} {
+		cfg := DefaultRoutingConfig()
+		cfg.Rules = []RoutingRule{}
+		cfg.DefaultRoute = "yandex"
+		cfg.Refusal.Enabled = enabled
+		if err := engine.SetRouting(cfg); err != nil {
+			t.Fatal(err)
+		}
+		id := fmt.Sprintf("policy-%d", i)
+		input := aa(&client.TClientMessage{Message: &client.TClientMessage_Event{Event: &client.TClientMessage_TEvent{Header: &header.TEventHeader{MessageId: id}, Event: &client.TClientMessage_TEvent_TextInput{TextInput: &request.TAliceRequestProto{Request: &request.TAliceRequestProto_TRequest{Event: &common.TEvent{Text: new("вопрос")}}}}}}})
+		if err := n.Client(ctx, websocket.MessageBinary, input); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-up:
+		case <-ctx.Done():
+			t.Fatal("no cloud request")
+		}
+		original := aa(&server.TServerMessage{Message: &server.TServerMessage_Event{Event: &server.TServerMessage_TEvent{Header: &header.TEventHeader{RefMessageId: id}, Event: &server.TServerMessage_TEvent_AliceResponse{AliceResponse: &response.TAliceResponseProto{VoiceResponse: &response.TAliceResponseProto_TVoiceResponse{OutputSpeech: &response.TAliceResponseProto_TVoiceResponse_TOutputSpeech{Text: new("Я не знаю")}}}}}}})
+		if err := n.Server(ctx, websocket.MessageBinary, original); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case b := <-down:
+			if !enabled {
+				if !bytes.Equal(b, original) {
+					t.Fatal("disabled fallback replaced answer")
+				}
+			} else if wire.Decode(b, wire.ServerToClient).Server.GetEvent().GetAliceResponse().GetVoiceResponse().GetOutputSpeech().GetText() != "Локальный ответ" {
+				t.Fatal("existing session did not pick up policy")
+			}
+		case <-ctx.Done():
+			t.Fatal("no response")
+		}
+	}
+}
+
+func TestExistingNativeSessionUsesReloadedRoute(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	up := make(chan []byte, 16)
+	down := make(chan []byte, 16)
+	engine := &Engine{LLM: completionFunc(func(context.Context, []llm.Message, bool) (string, error) { return "Новый маршрут", nil })}
+	n := NewNative(ctx, func(_ context.Context, _ websocket.MessageType, b []byte) error { up <- b; return nil }, func(_ context.Context, _ websocket.MessageType, b []byte) error { down <- b; return nil }, engine)
+	defer n.Close()
+	cfg := DefaultRoutingConfig()
+	cfg.Rules = []RoutingRule{}
+	cfg.DefaultRoute = "yandex"
+	if err := engine.SetRouting(cfg); err != nil {
+		t.Fatal(err)
+	}
+	input := func(id string) []byte {
+		return aa(&client.TClientMessage{Message: &client.TClientMessage_Event{Event: &client.TClientMessage_TEvent{Header: &header.TEventHeader{MessageId: id}, Event: &client.TClientMessage_TEvent_TextInput{TextInput: &request.TAliceRequestProto{Request: &request.TAliceRequestProto_TRequest{Event: &common.TEvent{Text: new("один вопрос")}}}}}}})
+	}
+	first := input("before")
+	if err := n.Client(ctx, websocket.MessageBinary, first); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case b := <-up:
+		if !bytes.Equal(b, first) {
+			t.Fatal("original cloud request changed")
+		}
+	case <-ctx.Done():
+		t.Fatal("no cloud request")
+	}
+	cfg.DefaultRoute = "llm"
+	if err := engine.SetRouting(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Client(ctx, websocket.MessageBinary, input("after")); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		select {
+		case b := <-down:
+			f := wire.Decode(b, wire.ServerToClient)
+			if f.Kind() == "AliceResponse" {
+				if f.Server.GetEvent().GetAliceResponse().GetVoiceResponse().GetOutputSpeech().GetText() != "Новый маршрут" {
+					t.Fatal("old route reused")
+				}
+				return
+			}
+		case <-ctx.Done():
+			t.Fatal("existing session did not change route")
+		}
 	}
 }

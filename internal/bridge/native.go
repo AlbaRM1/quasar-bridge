@@ -327,7 +327,7 @@ func (n *Native) Server(ctx context.Context, k websocket.MessageType, data []byt
 			text = r.GetVoiceResponse().GetOutputSpeech().GetText()
 		}
 
-		if resolver, ok := n.resolver.(FallbackResolver); ok && IsRefusal(text) {
+		if resolver, ok := n.resolver.(FallbackResolver); ok && n.isRefusal(text) {
 			p.local = true
 			p.ttsID = newID()
 			n.tts[p.ttsID] = p
@@ -526,4 +526,11 @@ func canReplaceResponse(r *response.TAliceResponseProto) bool {
 		}
 	}
 	return true
+}
+
+func (n *Native) isRefusal(text string) bool {
+	if detector, ok := n.resolver.(interface{ IsRefusal(string) bool }); ok {
+		return detector.IsRefusal(text)
+	}
+	return IsRefusal(text)
 }

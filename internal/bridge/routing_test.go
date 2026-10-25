@@ -1,0 +1,192 @@
+package bridge
+
+import (
+	"context"
+	"encoding/json/v2"
+	"errors"
+	"reflect"
+	"sync"
+	"testing"
+	"time"
+
+	"quasarbridge/internal/llm"
+)
+
+func TestRoutingConditionsAndOrderedPriority(t *testing.T) {
+	cfg := DefaultRoutingConfig()
+	cfg.Rules = []RoutingRule{
+		{Name: "exclude-music", Route: "home", Match: RoutingMatch{ContainsAllGroups: [][]string{{"свет", "ламп"}, {"включ", "выключ"}}, ContainsNone: []string{"песню"}}},
+		{Name: "prefix", Route: "llm", Match: RoutingMatch{StartsWithAny: []string{"спроси"}, ContainsAny: []string{"нейросеть"}}},
+		{Name: "regex", Route: "llm", Match: RoutingMatch{Regex: `^объясни\s+.+`}},
+	}
+	cfg.DefaultRoute = "yandex"
+	e := &Engine{}
+	if err := e.SetRouting(cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ text, route, rule string }{
+		{"ВЫКЛЮЧИ ЛАМПУ", "home", "exclude-music"},
+		{"включи песню про свет", "yandex", ""},
+		{"спроси нейросеть включи свет", "home", "exclude-music"},
+		{"спроси нейросеть о море", "llm", "prefix"},
+		{"ОБЪЯСНИ подробно", "llm", "regex"},
+		{"про море", "yandex", ""},
+	} {
+		got := e.Decide(t.Context(), tc.text)
+		if got.Route != tc.route || got.Rule != tc.rule {
+			t.Errorf("%q: %+v", tc.text, got)
+		}
+	}
+}
+func TestRoutingValidationAndCallerMutation(t *testing.T) {
+	for _, mutate := range []func(*RoutingConfig){
+		func(c *RoutingConfig) { c.Rules[0].Route = "bad" },
+		func(c *RoutingConfig) { c.Rules[0].Match = RoutingMatch{Regex: "["} },
+		func(c *RoutingConfig) { c.Rules[0].Match = RoutingMatch{} },
+		func(c *RoutingConfig) { c.Rules[0].Match = RoutingMatch{ContainsAllGroups: [][]string{{}}} },
+		func(c *RoutingConfig) { c.Rules[1].Name = c.Rules[0].Name },
+		func(c *RoutingConfig) { c.DefaultRoute = "bad" },
+		func(c *RoutingConfig) { c.Classifier.TimeoutMS = 0 },
+		func(c *RoutingConfig) { c.Refusal.Prefixes = nil },
+	} {
+		cfg := DefaultRoutingConfig()
+		mutate(&cfg)
+		if _, err := CompileRouting(cfg); err == nil {
+			t.Fatal("bad policy accepted")
+		}
+	}
+	cfg := DefaultRoutingConfig()
+	e := &Engine{}
+	if err := e.SetRouting(cfg); err != nil {
+		t.Fatal(err)
+	}
+	revision := e.RoutingStatus().Revision
+	cfg.Rules[0].Match.ContainsAllGroups[0][0] = "mutated"
+	if e.Decide(t.Context(), "выключи свет").Route != "home" || e.RoutingStatus().Revision != revision {
+		t.Fatal("caller mutation changed active policy")
+	}
+}
+func TestClassifierConfigAndFallback(t *testing.T) {
+	cfg := DefaultRoutingConfig()
+	cfg.Rules = []RoutingRule{}
+	cfg.Classifier.TimeoutMS = 50
+	cfg.Classifier.Prompt = "custom classifier"
+	cfg.Classifier.OnError = "llm"
+	var fail bool
+	e := &Engine{LLM: completionFunc(func(ctx context.Context, m []llm.Message, structured bool) (string, error) {
+		if !structured || m[0].Content != "custom classifier" {
+			t.Fatal("classifier config ignored")
+		}
+		if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 100*time.Millisecond {
+			t.Fatal("missing classifier timeout")
+		}
+		if fail {
+			return "", errors.New("offline")
+		}
+		return `{"route":"home"}`, nil
+	})}
+	if err := e.SetRouting(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.Decide(t.Context(), "unknown"); got.Route != "home" || got.Source != "classifier" {
+		t.Fatal(got)
+	}
+	fail = true
+	if got := e.Decide(t.Context(), "unknown"); got.Route != "llm" || got.Source != "classifier_error" {
+		t.Fatal(got)
+	}
+}
+func TestConfigurableRefusalsAndDisabledRules(t *testing.T) {
+	cfg := DefaultRoutingConfig()
+	cfg.Rules[0].Disabled = true
+	cfg.DefaultRoute = "yandex"
+	cfg.Rules = cfg.Rules[:1]
+	cfg.Refusal.Prefixes = []string{"нужна помощь"}
+	cfg.Refusal.ContainsAny = []string{"повторите"}
+	e := &Engine{}
+	if err := e.SetRouting(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if e.Decide(t.Context(), "включи свет").Route != "yandex" {
+		t.Fatal("disabled rule matched")
+	}
+	if !e.IsRefusal("Нужна   помощь, повторите") || e.IsRefusal("Я не знаю") {
+		t.Fatal("custom refusal matcher ignored")
+	}
+	cfg.Refusal.Enabled = false
+	if err := e.SetRouting(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if e.IsRefusal("нужна помощь повторите") {
+		t.Fatal("refusal matcher not disabled")
+	}
+}
+func TestDefaultPolicyExampleAndConcurrentReplacement(t *testing.T) {
+	a := DefaultRoutingConfig()
+	b := DefaultRoutingConfig()
+	if !reflect.DeepEqual(a, b) {
+		t.Fatal("defaults unstable")
+	}
+	a.Rules[0].Name = "different"
+	if b.Rules[0].Name == a.Rules[0].Name {
+		t.Fatal("defaults share storage")
+	}
+	e := &Engine{}
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			for range 50 {
+				d := e.Decide(t.Context(), "выключи свет")
+				if d.Route != "home" && d.Route != "yandex" {
+					t.Errorf("bad decision: %+v", d)
+				}
+			}
+		})
+	}
+	for i := range 50 {
+		c := DefaultRoutingConfig()
+		if i%2 == 0 {
+			c.Rules = []RoutingRule{}
+			c.DefaultRoute = "yandex"
+		}
+		if err := e.SetRouting(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wg.Wait()
+	raw, _ := json.Marshal(DefaultRoutingConfig())
+	var round RoutingConfig
+	if err := json.Unmarshal(raw, &round); err != nil || !reflect.DeepEqual(round, DefaultRoutingConfig()) {
+		t.Fatal("config roundtrip failed")
+	}
+}
+
+func TestClassifierKeepsSnapshotDuringReload(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	e := &Engine{LLM: completionFunc(func(context.Context, []llm.Message, bool) (string, error) {
+		close(started)
+		<-release
+		return "bad json", nil
+	})}
+	cfg := DefaultRoutingConfig()
+	cfg.Rules = []RoutingRule{}
+	cfg.Classifier.OnError = "home"
+	if err := e.SetRouting(cfg); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan RouteDecision, 1)
+	go func() { result <- e.Decide(t.Context(), "unknown") }()
+	<-started
+	cfg.DefaultRoute = "yandex"
+	if err := e.SetRouting(cfg); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if got := <-result; got.Route != "home" {
+		t.Fatal("classification crossed policy snapshots", got)
+	}
+	if got := e.Decide(t.Context(), "unknown"); got.Route != "yandex" {
+		t.Fatal("next request used old policy", got)
+	}
+}

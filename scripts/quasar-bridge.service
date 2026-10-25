@@ -10,6 +10,7 @@ Group=quasar-bridge
 WorkingDirectory=/opt/quasar-bridge
 EnvironmentFile=-/etc/quasar-bridge/runtime.env
 ExecStart=/opt/quasar-bridge/quasar-bridge -config /etc/quasar-bridge/config.json
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true

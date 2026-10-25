@@ -3,8 +3,11 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"quasarbridge/internal/bridge"
 )
 
 func configFile(t *testing.T, body string) string {
@@ -55,5 +58,56 @@ func TestReadConfigHasGenericDefaults(t *testing.T) {
 	}
 	if cfg.Mode != "observe" || !strings.HasPrefix(cfg.Listen, "localhost:") {
 		t.Fatalf("defaults=%+v", cfg)
+	}
+}
+
+func TestRoutingDefaultsAndPartialOverlay(t *testing.T) {
+	cfg, err := readConfig(configFile(t, `{"routing":{"classifier":{"on_error":"llm"},"refusal":{"enabled":false}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Routing.Rules) != 3 || cfg.Routing.Classifier.TimeoutMS != 8000 || cfg.Routing.Classifier.OnError != "llm" || cfg.Routing.Refusal.Enabled {
+		t.Fatalf("partial defaults lost: %+v", cfg.Routing)
+	}
+	empty, err := readConfig(configFile(t, `{"routing":{"rules":[],"default_route":"yandex"}}`))
+	if err != nil || len(empty.Routing.Rules) != 0 {
+		t.Fatalf("empty rules: %v", err)
+	}
+	for _, body := range []string{
+		`{"routing":{"default_route":"invalid"}}`,
+		`{"routing":{"rules":[{"name":"bad","route":"llm","match":{"regex":"["}}]}}`,
+		`{"routing":{"rules":[{"name":"bad","route":"llm","match":{"typo":["x"]}}]}}`,
+	} {
+		if _, err := readConfig(configFile(t, body)); err == nil {
+			t.Fatal("invalid routing accepted")
+		}
+	}
+}
+
+func TestRuleArrayReplacesDefaultElements(t *testing.T) {
+	cfg, err := readConfig(configFile(t, `{"routing":{"rules":[{"name":"custom","route":"llm","match":{"contains_any":["ping"]}}],"default_route":"yandex"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Routing.Rules) != 1 || len(cfg.Routing.Rules[0].Match.ContainsAllGroups) != 0 {
+		t.Fatal("custom rule inherited built-in conditions")
+	}
+	e := &bridge.Engine{}
+	if err := e.SetRouting(cfg.Routing); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.Decide(t.Context(), "PING"); got.Route != "llm" || got.Rule != "custom" {
+		t.Fatal(got)
+	}
+}
+
+func TestExampleRoutingEqualsBackwardCompatibleDefaults(t *testing.T) {
+	t.Setenv("QUASAR_HOME_MCP_URL", "https://home.example.invalid/mcp")
+	cfg, err := readConfig("../../config.example.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(cfg.Routing, bridge.DefaultRoutingConfig()) {
+		t.Fatal("example defaults drifted from legacy policy")
 	}
 }
