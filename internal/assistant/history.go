@@ -19,6 +19,7 @@ type HistoryQuery struct {
 	Query string `json:"query"`
 	Limit int    `json:"limit"`
 	Since string `json:"since"`
+	Until string `json:"until"`
 }
 type HistoryItem struct {
 	Time   time.Time `json:"time"`
@@ -27,6 +28,7 @@ type HistoryItem struct {
 	Route  string    `json:"route,omitempty"`
 }
 type HistoryResult struct {
+	Timezone  string        `json:"timezone,omitempty"`
 	Items     []HistoryItem `json:"items"`
 	Partial   bool          `json:"partial,omitzero"`
 	Recording bool          `json:"recording"`
@@ -50,6 +52,14 @@ func SearchHistory(ctx context.Context, c journal.Config, q HistoryQuery, maxSca
 		since, err = time.Parse(time.RFC3339, q.Since)
 		if err != nil {
 			return result, errors.New("since must be an RFC3339 timestamp")
+		}
+	}
+	until := time.Time{}
+	if q.Until != "" {
+		var err error
+		until, err = time.Parse(time.RFC3339, q.Until)
+		if err != nil || (!since.IsZero() && !until.After(since)) {
+			return result, errors.New("until must be an RFC3339 timestamp after since")
 		}
 	}
 	if c.Path == "" || maxScanMB < 1 {
@@ -111,7 +121,7 @@ func SearchHistory(ctx context.Context, c journal.Config, q HistoryQuery, maxSca
 		return s
 	}
 	add := func(key string, item HistoryItem) {
-		if item.Time.Before(since) {
+		if item.Time.Before(since) || (!until.IsZero() && !item.Time.Before(until)) {
 			return
 		}
 		text := normalize(item.Query + " " + item.Answer)

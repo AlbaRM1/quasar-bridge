@@ -92,6 +92,21 @@ func (n *Native) Client(ctx context.Context, k websocket.MessageType, data []byt
 		return n.up(ctx, k, data)
 	}
 	e := f.Client.GetEvent()
+	if stat := e.GetRequestStat(); stat != nil {
+		kind := "none"
+		raw := strings.ToLower(stat.GetError())
+		if raw != "" {
+			kind = "other"
+			if strings.Contains(raw, "timeout") || strings.Contains(raw, "timed out") || strings.Contains(raw, "deadline") {
+				kind = "timeout"
+			} else if strings.Contains(raw, "cancel") {
+				kind = "canceled"
+			}
+		}
+		timestamps := stat.GetTimestamps()
+		reported := func(value string) bool { return value != "" && value != "0" }
+		slog.Info("native_playback_status", "request", requestTag(stat.GetRequestMessageId()), "error_class", kind, "playback_reported", reported(timestamps.GetOnSoundPlayerBeginTime()) || reported(timestamps.GetOnPlayerBegin()), "finished_reported", reported(timestamps.GetOnSoundPlayerEndTime()) || reported(timestamps.GetOnPlayerEnd()))
+	}
 	var req *request.TAliceRequestProto
 	switch f.Kind() {
 	case "TextInput":
