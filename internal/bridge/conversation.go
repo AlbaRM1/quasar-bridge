@@ -140,6 +140,13 @@ func (c *conversation) server(data []byte, delivered bool) {
 		}
 		c.emit(id, journal.Event{Event: "transcript", Kind: f.Kind(), Text: text})
 	}
+	if d := e.GetDeferredAliceResponse(); d != nil {
+		name := "progress"
+		if d.GetIsLast() {
+			name = "response"
+		}
+		c.emit(id, journal.Event{Event: name, Kind: f.Kind(), Text: d.GetBaseResponse().GetText(), Delivered: delivered})
+	}
 	if r := e.GetAliceResponse(); r != nil {
 		if id == "" {
 			id = r.GetHeader().GetRequestId()
@@ -153,6 +160,9 @@ func (c *conversation) server(data []byte, delivered bool) {
 		name := "cloud_response"
 		if delivered {
 			name = "response"
+			if r.GetResponse().GetIsStreaming() {
+				name = "progress"
+			}
 		}
 		c.emit(id, journal.Event{Event: name, Kind: f.Kind(), Text: strings.Join(cards, "\n"), Speech: r.GetVoiceResponse().GetOutputSpeech().GetText(), Delivered: delivered})
 	}

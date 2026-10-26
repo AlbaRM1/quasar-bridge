@@ -25,7 +25,9 @@ type Engine struct {
 }
 
 func (e *Engine) Resolve(ctx context.Context, text string) (Resolution, error) {
-	decision := e.Decide(ctx, text)
+	return e.ResolveDecision(ctx, text, e.Decide(ctx, text))
+}
+func (e *Engine) ResolveDecision(ctx context.Context, text string, decision RouteDecision) (Resolution, error) {
 	route := decision.Route
 	if ctx.Err() != nil {
 		return Resolution{Route: route}, ctx.Err()

@@ -194,3 +194,15 @@ func TestClassifierKeepsSnapshotDuringReload(t *testing.T) {
 		t.Fatal("next request used old policy", got)
 	}
 }
+
+func TestShortHistoryRequestsSkipClassifier(t *testing.T) {
+	e := &Engine{LLM: completionFunc(func(context.Context, []llm.Message, bool) (string, error) {
+		t.Fatal("history request reached classifier")
+		return "", nil
+	})}
+	for _, text := range []string{"о чем мы сегодня общались", "О чём мы сегодня общались?", "что мы обсуждали сегодня"} {
+		if d := e.Decide(t.Context(), text); d.Route != "llm" || d.Source != "rule" {
+			t.Errorf("%q: %+v", text, d)
+		}
+	}
+}

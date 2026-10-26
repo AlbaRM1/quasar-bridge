@@ -27,5 +27,10 @@
     "web_max_bytes": 1048576,
     "web_max_chars": 12000,
     "history_max_scan_mb": 16
+  },
+  "local_progress": {
+    "enabled": false,
+    "after_ms": 2000,
+    "interval_ms": 4000
   }
 }

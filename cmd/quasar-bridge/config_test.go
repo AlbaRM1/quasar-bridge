@@ -111,3 +111,18 @@ func TestExampleRoutingEqualsBackwardCompatibleDefaults(t *testing.T) {
 		t.Fatal("example defaults drifted from legacy policy")
 	}
 }
+
+func TestLocalProgressConfiguration(t *testing.T) {
+	cfg, err := readConfig(configFile(t, `{"mode":"observe"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LocalProgress.Enabled || cfg.LocalProgress.AfterMS != 2000 || cfg.LocalProgress.IntervalMS != 4000 {
+		t.Fatal("unexpected progress defaults")
+	}
+	for _, body := range []string{`{"mode":"observe","local_progress":{"enabled":true,"after_ms":99}}`, `{"mode":"observe","local_progress":{"enabled":true,"interval_ms":999}}`, `{"mode":"observe","local_progress":{"enabled":true,"after_ms":10001}}`} {
+		if _, err := readConfig(configFile(t, body)); err == nil {
+			t.Fatal("invalid progress timing accepted")
+		}
+	}
+}

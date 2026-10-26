@@ -54,7 +54,7 @@ func TestNaturalHistoryHasLocalDateAndRecordsBeforeFirstModelCall(t *testing.T) 
 		}
 		return llm.Message{Content: "Сегодня считали три плюс четыре"}, nil
 	})}
-	answer, err := agent.Complete(t.Context(), []llm.Message{{Role: "user", Content: "посмотри в истории сообщений о чем мы с тобой сегодня общались"}}, false)
+	answer, err := agent.Complete(t.Context(), []llm.Message{{Role: "user", Content: "о чём мы сегодня общались"}}, false)
 	if err != nil || answer == "" || calls != 1 {
 		t.Fatalf("answer %q calls %d err %v", answer, calls, err)
 	}

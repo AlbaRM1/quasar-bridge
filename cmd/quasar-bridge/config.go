@@ -14,7 +14,14 @@ import (
 	"quasarbridge/internal/journal"
 )
 
+type progressConfig struct {
+	Enabled    bool `json:"enabled"`
+	AfterMS    int  `json:"after_ms"`
+	IntervalMS int  `json:"interval_ms"`
+}
+
 type config struct {
+	LocalProgress   progressConfig       `json:"local_progress"`
 	AssistantTools  assistant.Config     `json:"assistant_tools"`
 	ConversationLog journal.Config       `json:"conversation_log"`
 	Listen          string               `json:"listen"`
@@ -30,7 +37,7 @@ type config struct {
 }
 
 func readConfig(path string) (config, error) {
-	cfg := config{Routing: bridge.DefaultRoutingConfig(), ConversationLog: journal.DefaultConfig(), AssistantTools: assistant.DefaultConfig()}
+	cfg := config{Routing: bridge.DefaultRoutingConfig(), ConversationLog: journal.DefaultConfig(), AssistantTools: assistant.DefaultConfig(), LocalProgress: progressConfig{AfterMS: 2000, IntervalMS: 4000}}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return cfg, errors.New("cannot read configuration file")
@@ -95,6 +102,9 @@ func readConfig(path string) (config, error) {
 		if !validEndpoint(os.Getenv("QUASAR_HOME_MCP_URL"), "http", "https") {
 			return cfg, errors.New("hybrid mode requires QUASAR_HOME_MCP_URL")
 		}
+	}
+	if cfg.LocalProgress.AfterMS < 100 || cfg.LocalProgress.AfterMS > 10000 || cfg.LocalProgress.IntervalMS < 1000 || cfg.LocalProgress.IntervalMS > 10000 {
+		return cfg, errors.New("invalid local_progress timing")
 	}
 	if err := cfg.AssistantTools.Validate(); err != nil {
 		return cfg, err

@@ -34,11 +34,18 @@ type Resolution struct {
 type Resolver interface {
 	Resolve(context.Context, string) (Resolution, error)
 }
+type RoutedResolver interface {
+	Decide(context.Context, string) RouteDecision
+	ResolveDecision(context.Context, string, RouteDecision) (Resolution, error)
+}
 type FallbackResolver interface {
 	Fallback(context.Context, string) (Resolution, error)
 }
 
 type nativeRequest struct {
+	streaming                       bool
+	partial                         uint32
+	responseID                      string
 	final                           bool
 	header                          *header.TEventHeader
 	isText                          bool
@@ -53,22 +60,31 @@ type nativeRequest struct {
 	started, canceled, local, cloud bool
 	continuation                    []byte
 	ttsID                           string
+	progressTTS                     string
+	audio                           oggSpeech
+	audioIsProgress                 bool
+	audioStarted                    bool
+	audioStream                     uint32
+	audioWaiting                    bool
+	progressAudioDone               chan struct{}
 	expires                         *time.Timer
 }
 type Native struct {
-	ctx           context.Context
-	cancel        context.CancelFunc
-	up, down      Sender
-	resolver      Resolver
-	mu            sync.Mutex
-	requests      map[string]*nativeRequest
-	tts           map[string]*nativeRequest
-	streams       map[uint32]*nativeRequest
-	blocked       map[uint32]*nativeRequest
-	wg            sync.WaitGroup
-	OnRoute       func(id, route string)
-	GateText      bool
-	DecisionDelay time.Duration
+	ctx              context.Context
+	cancel           context.CancelFunc
+	up, down         Sender
+	resolver         Resolver
+	mu               sync.Mutex
+	requests         map[string]*nativeRequest
+	tts              map[string]*nativeRequest
+	streams          map[uint32]*nativeRequest
+	blocked          map[uint32]*nativeRequest
+	wg               sync.WaitGroup
+	OnRoute          func(id, route string)
+	GateText         bool
+	DecisionDelay    time.Duration
+	ProgressAfter    time.Duration
+	ProgressInterval time.Duration
 }
 
 func NewNative(ctx context.Context, up, down Sender, resolver Resolver) *Native {
@@ -150,6 +166,7 @@ func (n *Native) Client(ctx context.Context, k websocket.MessageType, data []byt
 			p.cancel()
 			delete(n.requests, p.id)
 			delete(n.tts, p.ttsID)
+			delete(n.tts, p.progressTTS)
 			for stream, q := range n.blocked {
 				if q == p {
 					delete(n.blocked, stream)
@@ -239,6 +256,17 @@ func (n *Native) Server(ctx context.Context, k websocket.MessageType, data []byt
 			n.mu.Lock()
 			p := n.streams[binary.BigEndian.Uint32(data)]
 			drop := n.blocked[binary.BigEndian.Uint32(data)] != nil || (p != nil && p.canceled)
+			if p != nil && p.streaming && !drop {
+				out, err := p.audio.feed(data[4:])
+				if err == nil && len(out) > 0 {
+					err = n.down(ctx, k, append(binary.BigEndian.AppendUint32(nil, p.audioStream), out...))
+				}
+				if err != nil {
+					p.cancel()
+				}
+				n.mu.Unlock()
+				return err
+			}
 			n.mu.Unlock()
 			if drop {
 				return nil
@@ -266,6 +294,34 @@ func (n *Native) Server(ctx context.Context, k websocket.MessageType, data []byt
 				n.mu.Unlock()
 				return nil
 			}
+			if p.streaming && sc.GetClose() != nil {
+				if err := p.audio.endSource(); err != nil {
+					p.cancel()
+					n.mu.Unlock()
+					return err
+				}
+				if p.audioIsProgress && sc.GetClose().GetReason() == 0 {
+					if tail := p.audio.flushPending(0, 0); len(tail) > 0 {
+						if err := n.down(ctx, k, append(binary.BigEndian.AppendUint32(nil, p.audioStream), tail...)); err != nil {
+							n.mu.Unlock()
+							return err
+						}
+					}
+					if !p.audioWaiting {
+						p.audioWaiting = true
+						n.waitAudio(p)
+						close(p.progressAudioDone)
+					}
+					n.mu.Unlock()
+					return nil
+				}
+				end := p.audio.finish()
+				if err := n.down(ctx, k, append(binary.BigEndian.AppendUint32(nil, p.audioStream), end...)); err != nil {
+					n.mu.Unlock()
+					return err
+				}
+				sc.StreamId = int64(p.audioStream)
+			}
 			sc.MessageId = p.id
 			n.mu.Unlock()
 			out, err := f.Marshal()
@@ -285,6 +341,7 @@ func (n *Native) Server(ctx context.Context, k websocket.MessageType, data []byt
 	if e == nil {
 		return n.down(ctx, k, data)
 	}
+
 	n.mu.Lock()
 	if f.Kind() == "TtsSpeak" {
 		delete(n.streams, uint32(e.GetHeader().GetStreamId()))
@@ -296,6 +353,7 @@ func (n *Native) Server(ctx context.Context, k websocket.MessageType, data []byt
 		for _, d := range r.GetResponse().GetDirectives() {
 			ds = append(ds, d.GetType()+":"+d.GetName())
 		}
+
 		slog.Info("native_cloud_shape", "matched", p != nil, "directives", ds, "cards", len(r.GetResponse().GetCards()), "voice_text_bytes", len(r.GetVoiceResponse().GetOutputSpeech().GetText()))
 	}
 	if p == nil {
@@ -314,6 +372,22 @@ func (n *Native) Server(ctx context.Context, k websocket.MessageType, data []byt
 		}
 		if e.GetTtsSpeak() != nil {
 			n.streams[uint32(e.Header.GetStreamId())] = p
+			if p.streaming {
+				if e.GetTtsSpeak().GetFormat() != "audio/opus" {
+					p.cancel()
+					n.mu.Unlock()
+					return errors.New("streaming progress requires Opus")
+				}
+				p.audioIsProgress = p.ttsID == p.progressTTS
+				p.audio.next()
+				if p.audioStarted {
+					p.audioWaiting = false
+					n.mu.Unlock()
+					return nil
+				}
+				p.audioStream = uint32(e.Header.GetStreamId())
+				p.audioStarted = true
+			}
 			slog.Info("native_tts_ready", "request", requestTag(p.id), "format", e.GetTtsSpeak().GetFormat(), "stream", e.Header.GetStreamId())
 		}
 		n.mu.Unlock()
@@ -421,7 +495,17 @@ func (n *Native) maybeResolve(p *nativeRequest) {
 		result := Resolution{Route: "yandex"}
 		var err error
 		if n.resolver != nil && strings.TrimSpace(text) != "" {
-			result, err = n.resolver.Resolve(p.ctx, text)
+			if routed, ok := n.resolver.(RoutedResolver); ok {
+				decision := routed.Decide(p.ctx, text)
+				stop := func() {}
+				if decision.Route != "yandex" && n.ProgressAfter > 0 {
+					stop = n.progress(p)
+				}
+				result, err = routed.ResolveDecision(p.ctx, text, decision)
+				stop()
+			} else {
+				result, err = n.resolver.Resolve(p.ctx, text)
+			}
 		}
 		if p.ctx.Err() != nil {
 			return
@@ -464,11 +548,13 @@ func (n *Native) maybeResolve(p *nativeRequest) {
 			return
 		}
 		p.local = true
-		p.ttsID = newID()
-		n.tts[p.ttsID] = p
+		if !p.streaming {
+			p.ttsID = newID()
+			n.tts[p.ttsID] = p
+		}
 		n.mu.Unlock()
 		slog.Info("native_route", "request", requestTag(p.id), "route", result.Route)
-		if p.gated {
+		if p.gated && !p.streaming {
 			if err := n.sendCancel(p.ctx, p.id); err != nil {
 				return
 			}
@@ -487,6 +573,9 @@ func (n *Native) sendCancel(ctx context.Context, id string) error {
 	return n.up(ctx, websocket.MessageBinary, b)
 }
 func (n *Native) reply(p *nativeRequest, text string) error {
+	if p.streaming {
+		return n.finishDeferred(p, text)
+	}
 	requestID := p.request.GetHeader().GetRequestId()
 	if requestID == "" {
 		requestID = p.id
@@ -505,8 +594,11 @@ func (n *Native) reply(p *nativeRequest, text string) error {
 	if err := n.down(p.ctx, websocket.MessageBinary, b); err != nil {
 		return err
 	}
+	return n.synthesize(p, text)
+}
+func (n *Native) synthesize(p *nativeRequest, text string) error {
 	t := &client.TClientMessage{Message: &client.TClientMessage_Event{Event: &client.TClientMessage_TEvent{Header: &header.TEventHeader{MessageId: p.ttsID}, Event: &client.TClientMessage_TEvent_TtsGenerate{TtsGenerate: &tts.TTtsGenerate{Text: new(text), Lang: new("ru-RU"), Format: new("audio/opus")}}}}}
-	b, err = (wire.Frame{Client: t, Prefix: []byte("AAPI")}).Marshal()
+	b, err := (wire.Frame{Client: t, Prefix: []byte("AAPI")}).Marshal()
 	if err != nil {
 		return err
 	}

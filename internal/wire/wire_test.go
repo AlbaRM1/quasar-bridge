@@ -7,6 +7,7 @@ import (
 	request "github.com/freequasar/quasar-go-genproto/proto/alice/protos/api/alicekit/events/alice_request"
 	asr "github.com/freequasar/quasar-go-genproto/proto/alice/protos/api/alicekit/events/asr_result"
 	header "github.com/freequasar/quasar-go-genproto/proto/alice/protos/api/alicekit/events/common/event_header"
+	stream "github.com/freequasar/quasar-go-genproto/proto/alice/protos/api/alicekit/events/stream_control"
 	client "github.com/freequasar/quasar-go-genproto/proto/alice/protos/api/alicekit/protocol/client"
 	server "github.com/freequasar/quasar-go-genproto/proto/alice/protos/api/alicekit/protocol/server"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -105,5 +106,22 @@ func TestAAPITransportMarkerIsNotProtobuf(t *testing.T) {
 	got, err := f.Marshal()
 	if err != nil || !bytes.Equal(raw, got) {
 		t.Fatal("transport marker was absorbed into protobuf unknown fields")
+	}
+}
+
+func TestDecodeServerCloseWithoutMessageID(t *testing.T) {
+	msg := &server.TServerMessage{Message: &server.TServerMessage_StreamControl{StreamControl: &stream.TStreamControl{StreamId: 72, Action: &stream.TStreamControl_Close{Close: &stream.TStreamControl_TActionClose{}}}}}
+	raw, err := proto.Marshal(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append([]byte("AAPI"), raw...)
+	f := Decode(raw, ServerToClient)
+	if f.Kind() != "StreamControl" || f.Server.GetStreamControl().GetStreamId() != 72 {
+		t.Fatal("valid Close became opaque")
+	}
+	out, err := f.Marshal()
+	if err != nil || !bytes.Equal(out, raw) {
+		t.Fatal("Close changed during round trip")
 	}
 }

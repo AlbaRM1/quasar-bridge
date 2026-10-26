@@ -56,7 +56,7 @@ func decodeBare(data []byte, d Direction) Frame {
 				f.Server = &m
 				return f
 			}
-			if sc := m.GetStreamControl(); sc != nil && sc.GetMessageId() != "" {
+			if sc := m.GetStreamControl(); sc != nil && (sc.GetMessageId() != "" || sc.GetClose() != nil && sc.GetStreamId() != 0) {
 				f.Server = &m
 				return f
 			}
