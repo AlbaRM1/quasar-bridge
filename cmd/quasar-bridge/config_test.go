@@ -153,3 +153,17 @@ func TestDialogueContextDefaultsAndValidation(t *testing.T) {
 		t.Fatal("invalid dialogue limit accepted")
 	}
 }
+
+func TestMCPExampleAndUnknownConfiguration(t *testing.T) {
+	t.Setenv("QUASAR_HOME_MCP_URL", "")
+	cfg, err := readConfig("../../config.mcp.example.json")
+	if err != nil || len(cfg.AssistantTools.MCPServers) != 1 || cfg.AssistantTools.MCPServers[0].Name != "parallel" {
+		t.Fatal("invalid MCP example", err)
+	}
+	if got := (&bridge.Engine{}); got.SetRouting(cfg.Routing) != nil || got.Decide(t.Context(), "найди в интернете документацию").Route != "llm" {
+		t.Fatal("MCP search phrase did not reach LLM")
+	}
+	if _, err := readConfig(configFile(t, `{"assistant_tools":{"enabled":true,"mcp_servers":[{"name":"x","url":"https://mcp.example.invalid","typo":true}]}}`)); err == nil {
+		t.Fatal("unknown MCP option accepted")
+	}
+}

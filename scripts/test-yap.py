@@ -45,9 +45,10 @@ class PackageTest(unittest.TestCase):
             binary.write_bytes(b"\x7fELF\x02" + bytes(13) + b"\xb7\x00" + bytes(44))
             package = builder.build(root / "package.yap", binary)
             with zipfile.ZipFile(package) as z:
-                self.assertEqual(set(z.namelist()), set(builder.PAYLOAD) | {"bin/quasar-bridge", "LICENSE", "NOTICE"})
+                self.assertEqual(set(z.namelist()), set(builder.PAYLOAD) | {"bin/quasar-bridge", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES"})
                 self.assertEqual(z.read("LICENSE"), (ROOT / "LICENSE").read_bytes())
                 self.assertEqual(z.read("NOTICE"), (ROOT / "NOTICE").read_bytes())
+                self.assertEqual(z.read("THIRD_PARTY_NOTICES"), (ROOT / "THIRD_PARTY_NOTICES").read_bytes())
                 manifest = tomllib.loads(z.read("plugin.toml").decode())
                 self.assertEqual(manifest["launch"]["mode"], "service")
                 self.assertEqual(manifest["launch"]["kind"], "binary")

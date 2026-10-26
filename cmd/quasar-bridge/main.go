@@ -32,6 +32,7 @@ func main() {
 	path := flag.String("config", "config.json", "configuration file")
 	query := flag.String("query", "", "run one text query for backend diagnostics")
 	check := flag.Bool("check-backends", false, "check LLM and configured Home Assistant connectivity")
+	checkMCP := flag.Bool("check-mcp", false, "connect to configured MCP servers and list tools without executing them")
 	route := flag.String("route", "", "explain a route without executing home actions or generating an answer")
 	validate := flag.Bool("check-config", false, "validate configuration without contacting backends")
 	speakerAction := flag.String("speaker-endpoint", "", "apply or rollback the on-device loopback endpoint (requires writable firmware)")
@@ -65,6 +66,9 @@ func main() {
 	if *check {
 		diagnostics++
 	}
+	if *checkMCP {
+		diagnostics++
+	}
 	if *validate {
 		diagnostics++
 	}
@@ -74,6 +78,18 @@ func main() {
 	}
 	if *validate {
 		fmt.Println("configuration is valid")
+		return
+	}
+	if *checkMCP {
+		ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
+		defer cancel()
+		status, err := assistant.CheckMCP(ctx, cfg.AssistantTools.MCPServers)
+		data, _ := json.Marshal(status)
+		fmt.Println(string(data))
+		if err != nil {
+			slog.Error("MCP check failed", "error", err)
+			os.Exit(1)
+		}
 		return
 	}
 	var clientCount, serverCount atomic.Int64
@@ -216,10 +232,18 @@ func main() {
 		}
 	}
 	mux := http.NewServeMux()
+	mcpConfigured := 0
+	if cfg.Mode == "hybrid" && cfg.AssistantTools.Enabled {
+		for _, server := range cfg.AssistantTools.MCPServers {
+			if !server.Disabled {
+				mcpConfigured++
+			}
+		}
+	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		state := engine.RoutingStatus()
-		data, _ := json.Marshal(map[string]any{"status": "ok", "mode": cfg.Mode, "client_frames": clientCount.Load(), "server_frames": serverCount.Load(), "routing_revision": state.Revision, "routing_rules": state.ActiveRules, "conversation_log_enabled": logs.Enabled(), "conversation_log_failures": logs.Failures(), "assistant_tools_enabled": cfg.AssistantTools.Enabled, "dialogue_context_enabled": cfg.DialogueContext.Enabled && cfg.Mode == "hybrid", "home_assistant_enabled": hc != nil && cfg.Mode == "hybrid"})
+		data, _ := json.Marshal(map[string]any{"status": "ok", "mode": cfg.Mode, "client_frames": clientCount.Load(), "server_frames": serverCount.Load(), "routing_revision": state.Revision, "routing_rules": state.ActiveRules, "conversation_log_enabled": logs.Enabled(), "conversation_log_failures": logs.Failures(), "assistant_tools_enabled": cfg.AssistantTools.Enabled, "dialogue_context_enabled": cfg.DialogueContext.Enabled && cfg.Mode == "hybrid", "home_assistant_enabled": hc != nil && cfg.Mode == "hybrid", "mcp_servers_configured": mcpConfigured})
 		_, _ = w.Write(data)
 	})
 	mux.Handle("/uni.ws", proxy)

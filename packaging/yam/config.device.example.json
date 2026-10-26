@@ -26,7 +26,8 @@
     "web_timeout_ms": 8000,
     "web_max_bytes": 1048576,
     "web_max_chars": 12000,
-    "history_max_scan_mb": 16
+    "history_max_scan_mb": 16,
+    "mcp_servers": []
   },
   "local_progress": {
     "enabled": false,

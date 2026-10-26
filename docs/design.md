@@ -4,6 +4,23 @@ Binding intent: Go selective native Quasar proxy; home locally through HA,
 complex/refused questions through a configured OpenAI-compatible LLM, other requests to Yandex.
 ASR and TTS stay in Yandex. The application handles one authenticated speaker connection at a time per session.
 
+Custom MCP tools are attached only to the conversational LLM agent, never to
+the classifier or the HA planner. The official Go SDK handles Streamable HTTP,
+legacy SSE and stdio. Sessions are isolated per answer and closed after it;
+discovery is parallel and bounded. Server names and stable hashed tool aliases
+prevent collisions, and the original input schema is forwarded to the model.
+JSON arguments preserve large numbers. Explicit allow/deny lists control exposure.
+Identical non-read-only calls within one answer reuse their outcome, including
+unknown/failed outcomes; transport failures do not cause action replay.
+
+MCP endpoints and credentials may come from env. HTTP credentials and legacy
+SSE posts stay on the configured origin; redirects are not followed. Stdio has
+a minimal inherited environment plus explicit configured additions. Raw SDK
+errors, process stderr, endpoints and tool arguments/results are not logged.
+History privacy carries across turns: external MCP calls are blocked after
+search_history unless that server explicitly allows private history. Discovery
+failure removes only that server's tools. Config changes require restart.
+
 Source schemas: freequasar/quasar-go-genproto at
 2f85025877ff367b10bc6e93e089207b8fca9a46.
 
