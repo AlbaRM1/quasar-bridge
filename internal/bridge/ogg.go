@@ -20,6 +20,7 @@ type oggSpeech struct {
 	trim             uint64
 }
 type oggSource struct {
+	discardAudio   bool
 	buffer, packet []byte
 	headers        int
 	samples        uint64
@@ -97,14 +98,16 @@ func (o *oggSpeech) feed(b []byte) ([]byte, error) {
 				if err != nil {
 					return nil, err
 				}
-				s.samples += samples
-				out = append(out, o.flushPending(0, 0)...)
-				o.pending = bytes.Clone(packet)
-				o.pendingSamples = samples
+				if !s.discardAudio {
+					s.samples += samples
+					out = append(out, o.flushPending(0, 0)...)
+					o.pending = bytes.Clone(packet)
+					o.pendingSamples = samples
+				}
 			}
 			s.headers++
 		}
-		if page[5]&4 != 0 {
+		if page[5]&4 != 0 && !s.discardAudio {
 			end := binary.LittleEndian.Uint64(page[6:14])
 			if end <= s.samples {
 				o.trim = s.samples - end

@@ -98,10 +98,11 @@ func (n *Native) beginDeferred(p *nativeRequest) error {
 	if err := n.down(p.ctx, websocket.MessageBinary, b); err != nil {
 		return err
 	}
-	if err := n.deferredPart(p, "Сейчас проверю.", false); err != nil {
+	if err := n.deferredPart(p, "", false); err != nil {
 		return err
 	}
-	return n.synthesize(p, "Сейчас проверю.")
+	// Obtain the provider's actual Opus headers; its speech payload is discarded.
+	return n.synthesize(p, "а")
 }
 func (n *Native) deferredPart(p *nativeRequest, text string, last bool) error {
 	if err := p.ctx.Err(); err != nil {

@@ -136,3 +136,45 @@ func TestOggSpeechTrimsFinalPacketWithoutRegressingGranule(t *testing.T) {
 		t.Fatalf("end padding not trimmed: %d", previous)
 	}
 }
+
+func TestSetupAudioIsDiscardedBeforeSilentWait(t *testing.T) {
+	var o oggSpeech
+	o.next()
+	o.source.discardAudio = true
+	source := oggSpeech{serial: 17}
+	head := append([]byte("OpusHead"), []byte{1, 1, 56, 1, 0x80, 0xbb, 0, 0, 0, 0, 0}...)
+	tags := append([]byte("OpusTags"), make([]byte, 8)...)
+	input := source.page(head, 2, 0)
+	input = append(input, source.page(tags, 0, 0)...)
+	// This marker must never reach the output, even inside the last held packet.
+	speech := []byte{0xf8, 0x12, 0x34, 0x56}
+	input = append(input, source.page(speech, 4, 800)...)
+	out, err := o.feed(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := o.endSource(); err != nil {
+		t.Fatal(err)
+	}
+	out = append(out, o.flushPending(0, 0)...)
+	if bytes.Contains(out, speech) || o.granule != 0 {
+		t.Fatal("setup speech reached speaker")
+	}
+	silence := o.silence()
+	if !bytes.Contains(silence, []byte{0xf8, 0xff, 0xfe}) || o.granule != 4800 {
+		t.Fatal("silent wait was not generated")
+	}
+	// Final synthesis must still pass through and close the same Ogg stream.
+	o.next()
+	out, err = o.feed(speechFixture(18))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := o.endSource(); err != nil {
+		t.Fatal(err)
+	}
+	out = append(out, o.finish()...)
+	if !bytes.Contains(out, []byte{0xf8, 0xff, 0xfe}) {
+		t.Fatal("final synthesis was discarded")
+	}
+}

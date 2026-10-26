@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -85,7 +86,7 @@ func testSlowLocalRequest(t *testing.T, finalStream uint32, omitID, voice bool) 
 		t.Fatal("missing initial streaming response")
 	}
 	part := next().Server.GetEvent().GetDeferredAliceResponse()
-	if part == nil || part.GetIsLast() || part.GetRequestId() != "application-request" {
+	if part == nil || part.GetIsLast() || part.GetRequestId() != "application-request" || part.GetBaseResponse().GetText() != "" {
 		t.Fatal("invalid keepalive")
 	}
 	var firstTTS wire.Frame
@@ -106,12 +107,16 @@ func testSlowLocalRequest(t *testing.T, finalStream uint32, omitID, voice bool) 
 	if voice && !canceledCloud {
 		t.Fatal("voice request was not canceled in cloud")
 	}
-	if firstTTS.Kind() != "TtsGenerate" || firstTTS.Client.GetEvent().GetTtsGenerate().GetText() != "Сейчас проверю." {
-		t.Fatal("missing initial speech")
+	if firstTTS.Kind() != "TtsGenerate" || firstTTS.Client.GetEvent().GetTtsGenerate().GetText() == "Сейчас проверю." {
+		t.Fatal("spoken filler was synthesized")
 	}
-	feedSpeech(t, n, firstTTS.Client.GetEvent().GetHeader().GetMessageId(), 72, omitID)
+	setupSpeech := []byte{0xf8, 0x12, 0x34, 0x56}
+	feedSpeech(t, n, firstTTS.Client.GetEvent().GetHeader().GetMessageId(), 72, omitID, setupSpeech)
 	for len(down) > 0 {
 		initial := <-down
+		if initial.Kind() == "opaque" && bytes.Contains(initial.Raw, setupSpeech) {
+			t.Fatal("setup speech was forwarded to speaker")
+		}
 		if initial.Kind() == "StreamControl" {
 			t.Fatal("initial audio closed")
 		}
@@ -160,20 +165,27 @@ func testSlowLocalRequest(t *testing.T, finalStream uint32, omitID, voice bool) 
 }
 
 func speechFixture(serial uint32) []byte {
+	return speechPacketFixture(serial, []byte{0xf8, 0xff, 0xfe})
+}
+func speechPacketFixture(serial uint32, packet []byte) []byte {
 	o := oggSpeech{serial: serial}
 	head := append([]byte("OpusHead"), []byte{1, 1, 0, 0, 0x80, 0xbb, 0, 0, 0, 0, 0}...)
 	tags := append([]byte("OpusTags"), make([]byte, 8)...)
 	b := o.page(head, 2, 0)
 	b = append(b, o.page(tags, 0, 0)...)
-	return append(b, o.page([]byte{0xf8, 0xff, 0xfe}, 4, 960)...)
+	return append(b, o.page(packet, 4, 960)...)
 }
-func feedSpeech(t *testing.T, n *Native, id string, streamID uint32, omitID bool) {
+func feedSpeech(t *testing.T, n *Native, id string, streamID uint32, omitID bool, packet ...[]byte) {
 	t.Helper()
 	speak := &server.TServerMessage{Message: &server.TServerMessage_Event{Event: &server.TServerMessage_TEvent{Header: &header.TEventHeader{MessageId: newID(), RefMessageId: id, StreamId: new(int64(streamID))}, Event: &server.TServerMessage_TEvent_TtsSpeak{TtsSpeak: &tts.TTtsSpeak{Format: "audio/opus"}}}}}
 	if err := n.Server(t.Context(), websocket.MessageBinary, aa(speak)); err != nil {
 		t.Fatal(err)
 	}
-	audio := append(binary.BigEndian.AppendUint32(nil, streamID), speechFixture(streamID)...)
+	source := speechFixture(streamID)
+	if len(packet) > 0 {
+		source = speechPacketFixture(streamID, packet[0])
+	}
+	audio := append(binary.BigEndian.AppendUint32(nil, streamID), source...)
 	if err := n.Server(t.Context(), websocket.MessageBinary, audio); err != nil {
 		t.Fatal(err)
 	}

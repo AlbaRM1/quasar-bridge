@@ -393,6 +393,7 @@ func (n *Native) Server(ctx context.Context, k websocket.MessageType, data []byt
 				}
 				p.audioIsProgress = p.ttsID == p.progressTTS
 				p.audio.next()
+				p.audio.source.discardAudio = p.audioIsProgress
 				if p.audioStarted {
 					p.audioWaiting = false
 					n.mu.Unlock()
