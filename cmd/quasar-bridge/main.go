@@ -171,7 +171,7 @@ func main() {
 		if *check {
 			_, err := lc.Complete(ctx, []llm.Message{{Role: "user", Content: "Ответь одним словом: связь"}}, false)
 			if err != nil {
-				slog.Error("LLM check failed")
+				slog.Error("LLM check failed", "error", err)
 				os.Exit(1)
 			}
 			if hc == nil {
@@ -298,7 +298,7 @@ func main() {
 		err = server.ListenAndServe()
 	}
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		slog.Error("listener failed")
+		slog.Error("listener failed", "error", err)
 		os.Exit(1)
 	}
 }
