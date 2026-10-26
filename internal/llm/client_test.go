@@ -110,3 +110,62 @@ func TestChatSupportsToolCallsAndToolResults(t *testing.T) {
 		t.Fatalf("answer: %+v %v", msg, err)
 	}
 }
+
+func TestExtraBodyIsMergedWithoutOverridingClientContract(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.UnmarshalRead(r.Body, &body); err != nil {
+			t.Error(err)
+			http.Error(w, "bad", 400)
+			return
+		}
+		if body["thinking"] == nil {
+			t.Error("extra body missing")
+		}
+		if body["model"] != "fixture-model" {
+			t.Errorf("extra body overrode model: %v", body["model"])
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer s.Close()
+	c := Client{BaseURL: s.URL, Model: "fixture-model",
+		ExtraBody: map[string]any{"thinking": map[string]any{"type": "disabled"}, "model": "hijack"}}
+	if _, err := c.Complete(t.Context(), []Message{{Role: "user", Content: "привет"}}, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReasoningContentIsEchoedBackToThinkingProviders(t *testing.T) {
+	calls := 0
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body struct {
+			Messages []Message `json:"messages"`
+		}
+		if err := json.UnmarshalRead(r.Body, &body); err != nil {
+			t.Error(err)
+			http.Error(w, "bad", 400)
+			return
+		}
+		if calls == 1 {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"","reasoning_content":"план","tool_calls":[{"id":"call-1","type":"function","function":{"name":"current_time","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`))
+			return
+		}
+		if len(body.Messages) < 2 || body.Messages[1].Reasoning != "план" {
+			t.Errorf("reasoning_content not echoed: %+v", body.Messages)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"Полдень"},"finish_reason":"stop"}]}`))
+	}))
+	defer s.Close()
+	c := Client{BaseURL: s.URL, Model: "fixture"}
+	tools := []Tool{{Type: "function", Function: Function{Name: "current_time", Parameters: map[string]any{"type": "object"}}}}
+	messages := []Message{{Role: "user", Content: "который час"}}
+	msg, err := c.Chat(t.Context(), messages, tools)
+	if err != nil || len(msg.ToolCalls) != 1 {
+		t.Fatalf("tool call: %+v %v", msg, err)
+	}
+	messages = append(messages, msg, Message{Role: "tool", ToolCallID: "call-1", Content: "{}"})
+	if _, err := c.Chat(t.Context(), messages, tools); err != nil {
+		t.Fatal(err)
+	}
+}

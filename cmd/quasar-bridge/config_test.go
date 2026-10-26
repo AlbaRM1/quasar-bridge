@@ -196,3 +196,13 @@ func TestReadConfigAcceptsListenAfterReply(t *testing.T) {
 		t.Fatal("explicit false lost")
 	}
 }
+
+func TestReadConfigNormalizesEmptyExtraBody(t *testing.T) {
+	cfg, err := readConfig(configFile(t, `{"mode":"hybrid","llm_base_url":"https://llm.example.invalid/v1","llm_model":"test","llm_extra_body":{}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LLMExtraBody != nil {
+		t.Fatalf("empty extra body kept: %v", cfg.LLMExtraBody)
+	}
+}

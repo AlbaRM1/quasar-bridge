@@ -10,6 +10,7 @@
   "home_warm_area": "",
   "system_prompt": "",
   "listen_after_reply": true,
+  "llm_extra_body": {},
   "routing": {
     "rules": [
       {

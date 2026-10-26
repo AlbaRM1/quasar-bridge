@@ -136,6 +136,23 @@ completion API недостаточно. Прямой запрос LLM огра�
 ответе, и в потоковом (`local_progress`). Если колонка начинает ловить фоновый
 разговор, поставьте `false`.
 
+Провайдерам с рассуждениями нужны собственные поля. DeepSeek в thinking-режиме
+требует возвращать `reasoning_content` в assistant-сообщениях с `tool_calls`,
+а локальные инструменты (`current_time`, `read_webpage`, `search_history`)
+выполняются до первого запроса к API и такого поля не имеют, поэтому ответ
+приходит с HTTP 400. Кроме того, DeepSeek игнорирует
+`chat_template_kwargs.enable_thinking` и не выключает рассуждения сам.
+Для таких API задайте параметры провайдера в `llm_extra_body`:
+
+```json
+"llm_extra_body": {"thinking": {"type": "disabled"}}
+```
+
+Поля из `llm_extra_body` добавляются в тело запроса и не переопределяют
+`model`, `messages`, `stream`, `max_tokens`, `temperature` и `tools`.
+`reasoning_content` из ответа модели передаётся обратно без изменений,
+поэтому цикл вызова инструментов моделью тоже работает.
+
 ### Home Assistant MCP
 
 Этот раздел необязателен. Для работы только с LLM и Яндексом оставьте

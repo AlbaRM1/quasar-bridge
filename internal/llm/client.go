@@ -15,6 +15,7 @@ import (
 type Message struct {
 	Role       string     `json:"role"`
 	Content    string     `json:"content"`
+	Reasoning  string     `json:"reasoning_content,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
@@ -37,10 +38,11 @@ type Function struct {
 	Parameters  map[string]any `json:"parameters"`
 }
 type Client struct {
-	BaseURL string
-	Model   string
-	APIKey  string
-	HTTP    *http.Client
+	BaseURL   string
+	Model     string
+	APIKey    string
+	HTTP      *http.Client
+	ExtraBody map[string]any
 }
 
 func (c *Client) Complete(ctx context.Context, messages []Message, structured bool) (string, error) {
@@ -67,6 +69,13 @@ func (c *Client) chat(ctx context.Context, messages []Message, structured bool, 
 	}
 	if structured {
 		request["response_format"] = map[string]string{"type": "json_object"}
+	}
+	// Провайдеры вроде DeepSeek в thinking-режиме требуют собственные поля;
+	// настройки не должны перетирать контракт клиента.
+	for key, value := range c.ExtraBody {
+		if _, exists := request[key]; !exists {
+			request[key] = value
+		}
 	}
 	body, err := json.Marshal(request)
 	if err != nil {

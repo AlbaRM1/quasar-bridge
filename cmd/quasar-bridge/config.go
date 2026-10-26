@@ -38,6 +38,7 @@ type config struct {
 	Routing          bridge.RoutingConfig `json:"routing"`
 	SystemPrompt     string               `json:"system_prompt"`
 	ListenAfterReply *bool                `json:"listen_after_reply"`
+	LLMExtraBody     map[string]any       `json:"llm_extra_body"`
 }
 
 func readConfig(path string) (config, error) {
@@ -70,6 +71,9 @@ func readConfig(path string) (config, error) {
 	}
 	if len(cfg.AllowedIPs) == 0 {
 		cfg.AllowedIPs = nil
+	}
+	if len(cfg.LLMExtraBody) == 0 {
+		cfg.LLMExtraBody = nil
 	}
 	if cfg.Listen == "" {
 		cfg.Listen = "localhost:8443"
