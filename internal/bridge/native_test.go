@@ -43,7 +43,7 @@ func aa(m proto.Message) []byte {
 }
 
 func TestNativeRoutesBeforeCloudExecutionAndCorrelatesTTS(t *testing.T) {
-	for _, route := range []string{"yandex", "llm", "no_continue"} {
+	for _, route := range []string{"yandex", "llm", "no_continue", "home_disabled"} {
 		t.Run(route, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
@@ -101,7 +101,7 @@ func TestNativeRoutesBeforeCloudExecutionAndCorrelatesTTS(t *testing.T) {
 				}
 			}))
 			defer upstream.Close()
-			resolver := resolverFunc(func(ctx context.Context, text string) (Resolution, error) {
+			var resolver Resolver = resolverFunc(func(ctx context.Context, text string) (Resolution, error) {
 				if text != "Тестовый вопрос" {
 					return Resolution{}, context.Canceled
 				}
@@ -110,6 +110,15 @@ func TestNativeRoutesBeforeCloudExecutionAndCorrelatesTTS(t *testing.T) {
 				}
 				return Resolution{Route: route, Answer: "Ответ своей модели"}, nil
 			})
+			if route == "home_disabled" {
+				engine := new(Engine)
+				cfg := DefaultRoutingConfig()
+				cfg.DefaultRoute = "home"
+				if err := engine.SetRouting(cfg); err != nil {
+					t.Fatal(err)
+				}
+				resolver = engine
+			}
 			log := new(journal.Writer)
 			defer log.Close()
 			logConfig := journal.DefaultConfig()
@@ -183,7 +192,7 @@ func TestNativeRoutesBeforeCloudExecutionAndCorrelatesTTS(t *testing.T) {
 				time.Sleep(time.Millisecond)
 			}
 			wantRoute := route
-			if route == "no_continue" {
+			if route == "no_continue" || route == "home_disabled" {
 				wantRoute = "yandex"
 			}
 			if !strings.Contains(logged, `"event":"request"`) || !strings.Contains(logged, `"route":"`+wantRoute+`"`) || !strings.Contains(logged, `"event":"response"`) || strings.Contains(logged, "fixture-audio") {
@@ -330,17 +339,21 @@ func TestNativeStreamReuseDoesNotKeepCanceledLocalOwner(t *testing.T) {
 }
 
 func TestVoiceRoutesOnlyAfterFinalASR(t *testing.T) {
-	for _, route := range []string{"yandex", "home", "empty"} {
+	for _, route := range []string{"yandex", "home", "empty", "home_disabled"} {
 		t.Run(route, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
 			up := make(chan []byte, 16)
-			n := NewNative(ctx, func(_ context.Context, _ websocket.MessageType, b []byte) error { up <- b; return nil }, func(context.Context, websocket.MessageType, []byte) error { return nil }, resolverFunc(func(_ context.Context, text string) (Resolution, error) {
+			var resolver Resolver = resolverFunc(func(_ context.Context, text string) (Resolution, error) {
 				if text != "включи свет" {
 					t.Errorf("text=%q", text)
 				}
 				return Resolution{Route: route, Answer: "Готово"}, nil
-			}))
+			})
+			if route == "home_disabled" {
+				resolver = new(Engine)
+			}
+			n := NewNative(ctx, func(_ context.Context, _ websocket.MessageType, b []byte) error { up <- b; return nil }, func(context.Context, websocket.MessageType, []byte) error { return nil }, resolver)
 			defer n.Close()
 			voice := aa(&client.TClientMessage{Message: &client.TClientMessage_Event{Event: &client.TClientMessage_TEvent{Header: &header.TEventHeader{MessageId: "voice", StreamId: new(int64(1))}, Event: &client.TClientMessage_TEvent_VoiceInput{VoiceInput: &request.TAliceRequestProto{Request: &request.TAliceRequestProto_TRequest{Event: &common.TEvent{Type: common.EEventType_voice_input.Enum()}}, Format: new("audio/opus")}}}}})
 			_ = n.Client(ctx, websocket.MessageBinary, voice)

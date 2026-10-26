@@ -31,7 +31,7 @@ import (
 func main() {
 	path := flag.String("config", "config.json", "configuration file")
 	query := flag.String("query", "", "run one text query for backend diagnostics")
-	check := flag.Bool("check-backends", false, "check LLM and Home Assistant connectivity")
+	check := flag.Bool("check-backends", false, "check LLM and configured Home Assistant connectivity")
 	route := flag.String("route", "", "explain a route without executing home actions or generating an answer")
 	validate := flag.Bool("check-config", false, "validate configuration without contacting backends")
 	speakerAction := flag.String("speaker-endpoint", "", "apply or rollback the on-device loopback endpoint (requires writable firmware)")
@@ -123,8 +123,12 @@ func main() {
 	}}
 	logs := new(journal.Writer)
 	lc := &llm.Client{BaseURL: cfg.LLMBaseURL, Model: cfg.LLMModel, APIKey: os.Getenv("QUASAR_LLM_API_KEY")}
-	hc := &home.Controller{Tools: &home.MCP{URL: os.Getenv("QUASAR_HOME_MCP_URL")}, Planner: lc}
-	engine := &bridge.Engine{LLM: lc, Home: hc, Dialogue: dialogue.New(cfg.DialogueContext)}
+	engine := &bridge.Engine{LLM: lc, Dialogue: dialogue.New(cfg.DialogueContext)}
+	var hc *home.Controller
+	if endpoint := os.Getenv("QUASAR_HOME_MCP_URL"); endpoint != "" {
+		hc = &home.Controller{Tools: &home.MCP{URL: endpoint}, Planner: lc}
+		engine.Home = hc
+	}
 	if cfg.AssistantTools.Enabled {
 		source := func() journal.Config {
 			c := logs.Config()
@@ -154,6 +158,10 @@ func main() {
 				slog.Error("LLM check failed")
 				os.Exit(1)
 			}
+			if hc == nil {
+				fmt.Println("LLM: ok; Home Assistant: disabled")
+				return
+			}
 			entities, err := hc.Entities(ctx)
 			if err != nil {
 				slog.Error("Home Assistant check failed", "error", err)
@@ -178,7 +186,7 @@ func main() {
 	defer logs.Close()
 	proxy.Journal = logs
 	if cfg.Mode == "hybrid" {
-		if cfg.HomeWarmArea != "" {
+		if hc != nil && cfg.HomeWarmArea != "" {
 			warmCtx, warmCancel := context.WithCancel(context.Background())
 			defer warmCancel()
 			go func() {
@@ -211,7 +219,7 @@ func main() {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		state := engine.RoutingStatus()
-		data, _ := json.Marshal(map[string]any{"status": "ok", "mode": cfg.Mode, "client_frames": clientCount.Load(), "server_frames": serverCount.Load(), "routing_revision": state.Revision, "routing_rules": state.ActiveRules, "conversation_log_enabled": logs.Enabled(), "conversation_log_failures": logs.Failures(), "assistant_tools_enabled": cfg.AssistantTools.Enabled, "dialogue_context_enabled": cfg.DialogueContext.Enabled && cfg.Mode == "hybrid"})
+		data, _ := json.Marshal(map[string]any{"status": "ok", "mode": cfg.Mode, "client_frames": clientCount.Load(), "server_frames": serverCount.Load(), "routing_revision": state.Revision, "routing_rules": state.ActiveRules, "conversation_log_enabled": logs.Enabled(), "conversation_log_failures": logs.Failures(), "assistant_tools_enabled": cfg.AssistantTools.Enabled, "dialogue_context_enabled": cfg.DialogueContext.Enabled && cfg.Mode == "hybrid", "home_assistant_enabled": hc != nil && cfg.Mode == "hybrid"})
 		_, _ = w.Write(data)
 	})
 	mux.Handle("/uni.ws", proxy)

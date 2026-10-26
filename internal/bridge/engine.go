@@ -77,7 +77,7 @@ func (e *Engine) ResolveDecision(ctx context.Context, text string, decision Rout
 	switch route {
 	case "home":
 		if e.Home == nil {
-			return result, errors.New("Home Assistant is not configured")
+			return Resolution{Route: "yandex"}, nil
 		}
 		answer, err := e.Home.Handle(ctx, text)
 		result.Answer = answer
@@ -161,7 +161,15 @@ func (e *Engine) IsRefusal(text string) bool { return e.policy().isRefusal(text)
 func IsRefusal(text string) bool             { return builtInRouting.isRefusal(text) }
 func (e *Engine) Decide(ctx context.Context, text string) (decision RouteDecision) {
 	ctx, snapshot, ticket := e.dialogue().Start(ctx)
-	defer func() { decision.ticket = ticket; decision.prepared = true }()
+	defer func() {
+		// Choose the cloud path before Native can start local progress/TTS.
+		if decision.Route == "home" && e.Home == nil {
+			decision.Route = "yandex"
+			decision.Source = "home_disabled"
+		}
+		decision.ticket = ticket
+		decision.prepared = true
+	}()
 	p := e.policy()
 	if dialogue.IsReset(text) {
 		return RouteDecision{Route: "llm", Source: "dialogue_reset"}

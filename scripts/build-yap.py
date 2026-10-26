@@ -31,6 +31,7 @@ def build(output, binary=None, tag=None):
         if header[:5] != b"\x7fELF\x02" or header[18:20] != b"\xb7\x00":
             raise ValueError("package requires a Linux ARM64 ELF binary")
         files = [(name, ROOT / "packaging/yam" / name) for name in PAYLOAD]
+        files.extend((name, ROOT / name) for name in ("LICENSE", "NOTICE"))
         files.append(("bin/quasar-bridge", executable))
         if sum(path.stat().st_size for _, path in files) > 32 * 1024 * 1024:
             raise ValueError("YAM unpacked size exceeds 32 MiB")

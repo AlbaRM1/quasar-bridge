@@ -52,6 +52,46 @@ func TestHomeFailureIsNotRetriedInYandex(t *testing.T) {
 	}
 }
 
+func TestUnconfiguredHomeRoutesToYandex(t *testing.T) {
+	for _, source := range []string{"rule", "default", "classifier", "classifier_error"} {
+		t.Run(source, func(t *testing.T) {
+			cfg := DefaultRoutingConfig()
+			e := &Engine{LLM: completionFunc(func(context.Context, []llm.Message, bool) (string, error) {
+				if source == "classifier_error" {
+					return "", errors.New("offline")
+				}
+				return `{"route":"home"}`, nil
+			})}
+			if source != "rule" {
+				cfg.Rules = nil
+			}
+			if source == "default" {
+				cfg.DefaultRoute = "home"
+			}
+			cfg.Classifier.OnError = "home"
+			if err := e.SetRouting(cfg); err != nil {
+				t.Fatal(err)
+			}
+			d := e.Decide(t.Context(), "Выключи свет")
+			if d.Route != "yandex" || d.Source != "home_disabled" {
+				t.Fatalf("unavailable home selected: %+v", d)
+			}
+			if source == "rule" && d.Rule != "home_devices" {
+				t.Fatal("matching rule identity lost", d)
+			}
+			r, err := e.ResolveDecision(t.Context(), "Выключи свет", d)
+			if err != nil || r.Route != "yandex" || r.Answer != "" {
+				t.Fatalf("cloud handoff failed: %+v %v", r, err)
+			}
+		})
+	}
+	// Callers supplying a decision directly must get the same handoff.
+	r, err := (&Engine{}).ResolveDecision(t.Context(), "Выключи свет", RouteDecision{Route: "home"})
+	if err != nil || r.Route != "yandex" {
+		t.Fatalf("direct decision failed: %+v %v", r, err)
+	}
+}
+
 func TestRefusalDetectionAvoidsBenignMention(t *testing.T) {
 	for _, text := range []string{"Я не могу помочь с этим запросом.", "Извините, я не могу обсуждать эту тему.", "Я не поняла ваш вопрос."} {
 		if !IsRefusal(text) {

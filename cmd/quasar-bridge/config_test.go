@@ -61,6 +61,20 @@ func TestReadConfigHasGenericDefaults(t *testing.T) {
 	}
 }
 
+func TestHybridHomeAssistantIsOptional(t *testing.T) {
+	t.Setenv("QUASAR_HOME_MCP_URL", "")
+	body := `{"mode":"hybrid","llm_base_url":"https://llm.example.invalid/v1","llm_model":"test"}`
+	if _, err := readConfig(configFile(t, body)); err != nil {
+		t.Fatalf("LLM-only hybrid rejected: %v", err)
+	}
+	for _, endpoint := range []string{"not-a-url", "file:///tmp/mcp", "https://user:secret@example.invalid/mcp"} {
+		t.Setenv("QUASAR_HOME_MCP_URL", endpoint)
+		if _, err := readConfig(configFile(t, body)); err == nil {
+			t.Fatal("invalid configured HA endpoint accepted")
+		}
+	}
+}
+
 func TestRoutingDefaultsAndPartialOverlay(t *testing.T) {
 	cfg, err := readConfig(configFile(t, `{"routing":{"classifier":{"on_error":"llm"},"refusal":{"enabled":false}}}`))
 	if err != nil {

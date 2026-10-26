@@ -101,8 +101,8 @@ func readConfig(path string) (config, error) {
 		if cfg.LLMBaseURL == "" || cfg.LLMModel == "" {
 			return cfg, errors.New("hybrid mode requires LLM URL and model")
 		}
-		if !validEndpoint(os.Getenv("QUASAR_HOME_MCP_URL"), "http", "https") {
-			return cfg, errors.New("hybrid mode requires QUASAR_HOME_MCP_URL")
+		if endpoint := os.Getenv("QUASAR_HOME_MCP_URL"); endpoint != "" && !validEndpoint(endpoint, "http", "https") {
+			return cfg, errors.New("invalid QUASAR_HOME_MCP_URL")
 		}
 	}
 	if cfg.LocalProgress.AfterMS < 100 || cfg.LocalProgress.AfterMS > 10000 || cfg.LocalProgress.IntervalMS < 1000 || cfg.LocalProgress.IntervalMS > 10000 {

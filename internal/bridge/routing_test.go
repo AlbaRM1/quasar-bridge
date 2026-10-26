@@ -20,7 +20,7 @@ func TestRoutingConditionsAndOrderedPriority(t *testing.T) {
 		{Name: "regex", Route: "llm", Match: RoutingMatch{Regex: `^объясни\s+.+`}},
 	}
 	cfg.DefaultRoute = "yandex"
-	e := &Engine{}
+	e := &Engine{Home: homeFunc(func(context.Context, string) (string, error) { return "", nil })}
 	if err := e.SetRouting(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestRoutingValidationAndCallerMutation(t *testing.T) {
 		}
 	}
 	cfg := DefaultRoutingConfig()
-	e := &Engine{}
+	e := &Engine{Home: homeFunc(func(context.Context, string) (string, error) { return "", nil })}
 	if err := e.SetRouting(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestClassifierConfigAndFallback(t *testing.T) {
 	cfg.Classifier.Prompt = "custom classifier"
 	cfg.Classifier.OnError = "llm"
 	var fail bool
-	e := &Engine{LLM: completionFunc(func(ctx context.Context, m []llm.Message, structured bool) (string, error) {
+	e := &Engine{Home: homeFunc(func(context.Context, string) (string, error) { return "", nil }), LLM: completionFunc(func(ctx context.Context, m []llm.Message, structured bool) (string, error) {
 		if !structured || m[0].Content != "custom classifier" {
 			t.Fatal("classifier config ignored")
 		}
@@ -135,7 +135,7 @@ func TestDefaultPolicyExampleAndConcurrentReplacement(t *testing.T) {
 	if b.Rules[0].Name == a.Rules[0].Name {
 		t.Fatal("defaults share storage")
 	}
-	e := &Engine{}
+	e := &Engine{Home: homeFunc(func(context.Context, string) (string, error) { return "", nil })}
 	var wg sync.WaitGroup
 	for range 4 {
 		wg.Go(func() {
@@ -168,7 +168,7 @@ func TestDefaultPolicyExampleAndConcurrentReplacement(t *testing.T) {
 func TestClassifierKeepsSnapshotDuringReload(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
-	e := &Engine{LLM: completionFunc(func(context.Context, []llm.Message, bool) (string, error) {
+	e := &Engine{Home: homeFunc(func(context.Context, string) (string, error) { return "", nil }), LLM: completionFunc(func(context.Context, []llm.Message, bool) (string, error) {
 		close(started)
 		<-release
 		return "bad json", nil

@@ -25,6 +25,11 @@ Regression now requires the entire marker to remain outside protobuf.
 Earlier failed gating tests with the 2-byte interpretation are invalid evidence
 about the server's approval support.
 
+Ruling: HA is optional. An absent/empty QUASAR_HOME_MCP_URL disables the client,
+warm-up and HA diagnostics. Every home route then resolves to Yandex before
+Native starts local progress, regardless of its rule/classifier/default source.
+A nonempty invalid URL is rejected; configured HA failures never retry in Yandex.
+
 Ruling: HA calls use the configured local MCP capability URL in runtime.env,
 not a new HA token. Honor Assist exposure; inventory states are fresh, exposure
 is briefly cached for discovery and rechecked before actions. Batch validation
