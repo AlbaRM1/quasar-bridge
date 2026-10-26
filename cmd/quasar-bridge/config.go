@@ -22,21 +22,22 @@ type progressConfig struct {
 }
 
 type config struct {
-	DialogueContext dialogue.Config      `json:"dialogue_context"`
-	LocalProgress   progressConfig       `json:"local_progress"`
-	AssistantTools  assistant.Config     `json:"assistant_tools"`
-	ConversationLog journal.Config       `json:"conversation_log"`
-	Listen          string               `json:"listen"`
-	Upstream        string               `json:"upstream"`
-	TLSCert         string               `json:"tls_cert"`
-	TLSKey          string               `json:"tls_key"`
-	AllowedIPs      []string             `json:"allowed_ips"`
-	Mode            string               `json:"mode"`
-	LLMBaseURL      string               `json:"llm_base_url"`
-	LLMModel        string               `json:"llm_model"`
-	HomeWarmArea    string               `json:"home_warm_area"`
-	Routing         bridge.RoutingConfig `json:"routing"`
-	SystemPrompt    string               `json:"system_prompt"`
+	DialogueContext  dialogue.Config      `json:"dialogue_context"`
+	LocalProgress    progressConfig       `json:"local_progress"`
+	AssistantTools   assistant.Config     `json:"assistant_tools"`
+	ConversationLog  journal.Config       `json:"conversation_log"`
+	Listen           string               `json:"listen"`
+	Upstream         string               `json:"upstream"`
+	TLSCert          string               `json:"tls_cert"`
+	TLSKey           string               `json:"tls_key"`
+	AllowedIPs       []string             `json:"allowed_ips"`
+	Mode             string               `json:"mode"`
+	LLMBaseURL       string               `json:"llm_base_url"`
+	LLMModel         string               `json:"llm_model"`
+	HomeWarmArea     string               `json:"home_warm_area"`
+	Routing          bridge.RoutingConfig `json:"routing"`
+	SystemPrompt     string               `json:"system_prompt"`
+	ListenAfterReply *bool                `json:"listen_after_reply"`
 }
 
 func readConfig(path string) (config, error) {

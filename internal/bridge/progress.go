@@ -109,7 +109,7 @@ func (n *Native) deferredPart(p *nativeRequest, text string, last bool) error {
 		return err
 	}
 	p.partial++
-	base := &deferred.TDeferedAliceResponseProto_TBaseResponse{}
+	base := &deferred.TDeferedAliceResponseProto_TBaseResponse{ShouldListen: n.ShouldListen}
 	if text != "" {
 		base.Text = new(text)
 	}

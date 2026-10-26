@@ -223,6 +223,7 @@ func main() {
 		proxy.NewSession = func(ctx context.Context, up, down bridge.Sender) bridge.Session {
 			n := bridge.NewNative(ctx, up, down, engine)
 			n.GateText = false
+			n.ShouldListen = cfg.ListenAfterReply == nil || *cfg.ListenAfterReply
 			if cfg.LocalProgress.Enabled {
 				n.ProgressAfter = time.Duration(cfg.LocalProgress.AfterMS) * time.Millisecond
 				n.ProgressInterval = time.Duration(cfg.LocalProgress.IntervalMS) * time.Millisecond

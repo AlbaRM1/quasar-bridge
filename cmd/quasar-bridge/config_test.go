@@ -178,3 +178,21 @@ func TestReadConfigAcceptsSystemPrompt(t *testing.T) {
 		t.Fatalf("system prompt=%q", cfg.SystemPrompt)
 	}
 }
+
+func TestReadConfigAcceptsListenAfterReply(t *testing.T) {
+	base := `{"mode":"hybrid","llm_base_url":"https://llm.example.invalid/v1","llm_model":"test"}`
+	cfg, err := readConfig(configFile(t, base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ListenAfterReply != nil {
+		t.Fatalf("default overridden: %v", *cfg.ListenAfterReply)
+	}
+	cfg, err = readConfig(configFile(t, `{"mode":"hybrid","llm_base_url":"https://llm.example.invalid/v1","llm_model":"test","listen_after_reply":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ListenAfterReply == nil || *cfg.ListenAfterReply {
+		t.Fatal("explicit false lost")
+	}
+}

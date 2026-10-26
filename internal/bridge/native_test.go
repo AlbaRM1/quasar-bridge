@@ -506,3 +506,38 @@ func TestExistingNativeSessionUsesReloadedRoute(t *testing.T) {
 		}
 	}
 }
+
+func TestReplyAndDeferredResponseExposeShouldListen(t *testing.T) {
+	for _, want := range []bool{true, false} {
+		frames := [][]byte{}
+		collect := func(_ context.Context, _ websocket.MessageType, data []byte) error {
+			frames = append(frames, append([]byte{}, data...))
+			return nil
+		}
+		n := &Native{ShouldListen: want, up: collect, down: collect, tts: map[string]*nativeRequest{}}
+		p := &nativeRequest{id: "req-1", request: &request.TAliceRequestProto{Header: &request.TAliceRequestProto_THeader{RequestId: new("req-1")}}, ctx: t.Context()}
+		if err := n.reply(p, "Ответ"); err != nil {
+			t.Fatalf("reply: %v", err)
+		}
+		seen := false
+		for _, data := range frames {
+			if r := wire.Decode(data, wire.ServerToClient).Server.GetEvent().GetAliceResponse(); r != nil {
+				seen = true
+				if r.GetVoiceResponse().GetShouldListen() != want {
+					t.Fatalf("reply ShouldListen=%v want %v", r.GetVoiceResponse().GetShouldListen(), want)
+				}
+			}
+		}
+		if !seen {
+			t.Fatal("no alice response emitted")
+		}
+		frames = [][]byte{}
+		if err := n.deferredPart(&nativeRequest{id: "req-2", request: p.request, ctx: t.Context()}, "Ответ", true); err != nil {
+			t.Fatalf("deferred: %v", err)
+		}
+		got := wire.Decode(frames[0], wire.ServerToClient).Server.GetEvent().GetDeferredAliceResponse().GetBaseResponse().GetShouldListen()
+		if got != want {
+			t.Fatalf("deferred ShouldListen=%v want %v", got, want)
+		}
+	}
+}

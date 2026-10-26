@@ -9,6 +9,7 @@
   "llm_model": "your-model",
   "home_warm_area": "",
   "system_prompt": "",
+  "listen_after_reply": true,
   "routing": {
     "rules": [
       {
