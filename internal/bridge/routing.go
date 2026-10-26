@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"quasarbridge/internal/dialogue"
 	"regexp"
 	"strings"
 )
@@ -39,9 +40,11 @@ type RefusalConfig struct {
 	ContainsAny []string `json:"contains_any"`
 }
 type RouteDecision struct {
-	Route  string `json:"route"`
-	Rule   string `json:"rule,omitempty"`
-	Source string `json:"source"`
+	ticket   dialogue.Ticket
+	prepared bool
+	Route    string `json:"route"`
+	Rule     string `json:"rule,omitempty"`
+	Source   string `json:"source"`
 }
 type compiledRule struct {
 	name, route       string

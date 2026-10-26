@@ -11,6 +11,7 @@ import (
 
 	"quasarbridge/internal/assistant"
 	"quasarbridge/internal/bridge"
+	"quasarbridge/internal/dialogue"
 	"quasarbridge/internal/journal"
 )
 
@@ -21,6 +22,7 @@ type progressConfig struct {
 }
 
 type config struct {
+	DialogueContext dialogue.Config      `json:"dialogue_context"`
 	LocalProgress   progressConfig       `json:"local_progress"`
 	AssistantTools  assistant.Config     `json:"assistant_tools"`
 	ConversationLog journal.Config       `json:"conversation_log"`
@@ -37,7 +39,7 @@ type config struct {
 }
 
 func readConfig(path string) (config, error) {
-	cfg := config{Routing: bridge.DefaultRoutingConfig(), ConversationLog: journal.DefaultConfig(), AssistantTools: assistant.DefaultConfig(), LocalProgress: progressConfig{AfterMS: 2000, IntervalMS: 4000}}
+	cfg := config{DialogueContext: dialogue.DefaultConfig(), Routing: bridge.DefaultRoutingConfig(), ConversationLog: journal.DefaultConfig(), AssistantTools: assistant.DefaultConfig(), LocalProgress: progressConfig{AfterMS: 2000, IntervalMS: 4000}}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return cfg, errors.New("cannot read configuration file")
@@ -105,6 +107,9 @@ func readConfig(path string) (config, error) {
 	}
 	if cfg.LocalProgress.AfterMS < 100 || cfg.LocalProgress.AfterMS > 10000 || cfg.LocalProgress.IntervalMS < 1000 || cfg.LocalProgress.IntervalMS > 10000 {
 		return cfg, errors.New("invalid local_progress timing")
+	}
+	if err := cfg.DialogueContext.Validate(); err != nil {
+		return cfg, err
 	}
 	if err := cfg.AssistantTools.Validate(); err != nil {
 		return cfg, err

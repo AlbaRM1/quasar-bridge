@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"quasarbridge/internal/dialogue"
 	"quasarbridge/internal/journal"
 	"quasarbridge/internal/llm"
 )
@@ -92,19 +93,49 @@ func (t *Tools) Call(ctx context.Context, name, args string) (any, error) {
 // InitialCalls supplies cheap local context without an extra model round trip.
 var explicitURL = regexp.MustCompile(`(?i)https?://[^\s<>"'«»]+`)
 
-func (t *Tools) InitialCalls(text string) []llm.FunctionCall {
+func historyQuestion(text string) bool {
+	text = dialogue.Normalize(text)
+	for _, marker := range []string{"в истории", "истории сообщени", "истории диалога", "истории запросов", "историю запросов", "что я спрашивал", "когда я спрашивал", "о чем мы", "что мы обсуждали", "что ты отвечал", "что ты ответил", "что я просил", "когда я просил"} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+func (t *Tools) InitialCalls(text string) []llm.FunctionCall { return t.initialCalls(text, false) }
+
+// Followups inherit the topic, but temporal filters always come from this turn.
+func (t *Tools) InitialCallsForConversation(messages []llm.Message) []llm.FunctionCall {
+	last := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			last = i
+			break
+		}
+	}
+	if last < 0 {
+		return t.InitialCalls("")
+	}
+	text := messages[last].Content
+	history := false
+	if dialogue.IsFollowup(text) {
+		for i := last - 1; i >= 0; i-- {
+			if messages[i].Role == "user" && !dialogue.IsFollowup(messages[i].Content) {
+				history = historyQuestion(messages[i].Content)
+				break
+			}
+		}
+	}
+	return t.initialCalls(text, history)
+}
+func (t *Tools) initialCalls(text string, history bool) []llm.FunctionCall {
 	original := text
 	var calls []llm.FunctionCall
 	if t.Config.Time {
 		calls = append(calls, llm.FunctionCall{Name: "current_time", Arguments: "{}"})
 	}
-	text = strings.ReplaceAll(strings.ToLower(text), "ё", "е")
-	history := false
-	for _, marker := range []string{"в истории", "истории сообщени", "истории диалога", "истории запросов", "историю запросов", "что я спрашивал", "когда я спрашивал", "о чем мы", "что мы обсуждали", "что ты отвечал", "что ты ответил", "что я просил", "когда я просил"} {
-		if strings.Contains(text, marker) {
-			history = true
-		}
-	}
+	history = history || historyQuestion(text)
+	text = dialogue.Normalize(text)
 	// A request that explicitly combines a page with history must read the page first.
 	web := strings.Contains(text, "https://") || strings.Contains(text, "http://") || strings.Contains(text, "страниц") || strings.Contains(text, "сайт")
 	if t.Config.Web {
@@ -127,7 +158,12 @@ func (t *Tools) InitialCalls(text string) []llm.FunctionCall {
 				start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 				if strings.Contains(text, "вчера") {
 					query.Until = start.Format(time.RFC3339)
-					start = start.AddDate(0, 0, -1)
+					days := -1
+					if strings.Contains(text, "позавчера") {
+						days = -2
+						query.Until = start.AddDate(0, 0, -1).Format(time.RFC3339)
+					}
+					start = start.AddDate(0, 0, days)
 				}
 				query.Since = start.Format(time.RFC3339)
 			}

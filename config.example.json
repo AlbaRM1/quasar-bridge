@@ -190,5 +190,11 @@
     "enabled": true,
     "after_ms": 2000,
     "interval_ms": 4000
+  },
+  "dialogue_context": {
+    "enabled": true,
+    "ttl_seconds": 300,
+    "max_turns": 6,
+    "max_chars": 12000
   }
 }

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"quasarbridge/internal/dialogue"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -18,10 +20,30 @@ type HomeHandler interface {
 	Handle(context.Context, string) (string, error)
 }
 type Engine struct {
-	LLM       Completer
-	Assistant Completer
-	Home      HomeHandler
-	routing   atomic.Pointer[RoutingPolicy]
+	LLM          Completer
+	Assistant    Completer
+	Home         HomeHandler
+	Dialogue     *dialogue.Store
+	dialogueOnce sync.Once
+	routing      atomic.Pointer[RoutingPolicy]
+}
+
+func (e *Engine) dialogue() *dialogue.Store {
+	e.dialogueOnce.Do(func() {
+		if e.Dialogue == nil {
+			e.Dialogue = dialogue.New(dialogue.DefaultConfig())
+		}
+	})
+	return e.Dialogue
+}
+
+// Prepare reserves this speaker's request before ASR/classification can finish late.
+func (e *Engine) Prepare(ctx context.Context) context.Context {
+	if ctx.Err() != nil {
+		return ctx
+	}
+	ctx, _, _ = e.dialogue().Start(ctx)
+	return ctx
 }
 
 func (e *Engine) Resolve(ctx context.Context, text string) (Resolution, error) {
@@ -29,10 +51,28 @@ func (e *Engine) Resolve(ctx context.Context, text string) (Resolution, error) {
 }
 func (e *Engine) ResolveDecision(ctx context.Context, text string, decision RouteDecision) (Resolution, error) {
 	route := decision.Route
+	if decision.prepared {
+		ctx = e.dialogue().Use(ctx, decision.ticket)
+	} else {
+		ctx = e.Prepare(ctx)
+	}
+	_, _, ticket := e.dialogue().Start(ctx)
 	if ctx.Err() != nil {
 		return Resolution{Route: route}, ctx.Err()
 	}
 
+	if !e.dialogue().Current(ctx, ticket) {
+		return Resolution{Route: route}, context.Canceled
+	}
+	if decision.Source == "dialogue_reset" {
+		if !e.dialogue().Clear(ctx, ticket) {
+			return Resolution{Route: route}, context.Canceled
+		}
+		return Resolution{Route: "llm", Answer: "Начинаем новый разговор."}, nil
+	}
+	if route != "llm" && !e.dialogue().Clear(ctx, ticket) {
+		return Resolution{Route: route}, context.Canceled
+	}
 	result := Resolution{Route: route}
 	switch route {
 	case "home":
@@ -57,7 +97,31 @@ func (e *Engine) Fallback(ctx context.Context, text string) (Resolution, error) 
 	if e.Assistant != nil {
 		answerer = e.Assistant
 	}
-	answer, err := answerer.Complete(ctx, []llm.Message{{Role: "system", Content: "Ты голосовой помощник пользователя. Отвечай по-русски, кратко и по существу, обычно до трёх предложений. Ответ будет прочитан вслух: без Markdown и служебных рассуждений. Не заявляй об управлении устройствами или выполнении действий: для этого есть отдельный обработчик умного дома."}, {Role: "user", Content: text}}, false)
+	ctx, snapshot, ticket := e.dialogue().Start(ctx)
+	if !e.dialogue().Current(ctx, ticket) {
+		return r, context.Canceled
+	}
+	messages := []llm.Message{{Role: "system", Content: "Ты голосовой помощник пользователя. Отвечай по-русски, кратко и по существу, обычно до трёх предложений. Ответ будет прочитан вслух: без Markdown и служебных рассуждений. Не заявляй об управлении устройствами или выполнении действий: для этого есть отдельный обработчик умного дома."}}
+	messages = append(messages, snapshot.Messages...)
+	messages = append(messages, llm.Message{Role: "user", Content: text})
+	private := snapshot.PrivateHistory
+	var answer string
+	var err error
+	if contextual, ok := answerer.(interface {
+		CompleteDialogue(context.Context, []llm.Message, bool) (string, bool, error)
+	}); ok {
+		answer, private, err = contextual.CompleteDialogue(ctx, messages, private)
+	} else {
+		answer, err = answerer.Complete(ctx, messages, false)
+	}
+	if !e.dialogue().Current(ctx, ticket) {
+		return r, context.Canceled
+	}
+	if err == nil {
+		if !e.dialogue().Commit(ctx, ticket, text, answer, private) {
+			return r, context.Canceled
+		}
+	}
 	r.Answer = answer
 	return r, err
 }
@@ -95,10 +159,18 @@ func (e *Engine) RoutingStatus() RoutingStatus {
 }
 func (e *Engine) IsRefusal(text string) bool { return e.policy().isRefusal(text) }
 func IsRefusal(text string) bool             { return builtInRouting.isRefusal(text) }
-func (e *Engine) Decide(ctx context.Context, text string) RouteDecision {
+func (e *Engine) Decide(ctx context.Context, text string) (decision RouteDecision) {
+	ctx, snapshot, ticket := e.dialogue().Start(ctx)
+	defer func() { decision.ticket = ticket; decision.prepared = true }()
 	p := e.policy()
+	if dialogue.IsReset(text) {
+		return RouteDecision{Route: "llm", Source: "dialogue_reset"}
+	}
 	if d, ok := p.match(text); ok {
 		return d
+	}
+	if len(snapshot.Messages) > 0 && dialogue.IsFollowup(text) {
+		return RouteDecision{Route: "llm", Source: "dialogue"}
 	}
 	if p.defaultRoute != "classify" {
 		return RouteDecision{Route: p.defaultRoute, Source: "default"}
@@ -109,7 +181,10 @@ func (e *Engine) Decide(ctx context.Context, text string) RouteDecision {
 	}
 	classCtx, cancel := context.WithTimeout(ctx, time.Duration(p.classifier.TimeoutMS)*time.Millisecond)
 	defer cancel()
-	answer, err := e.LLM.Complete(classCtx, []llm.Message{{Role: "system", Content: p.classifier.Prompt}, {Role: "user", Content: text}}, true)
+	messages := []llm.Message{{Role: "system", Content: p.classifier.Prompt}}
+	messages = append(messages, snapshot.Messages...)
+	messages = append(messages, llm.Message{Role: "user", Content: text})
+	answer, err := e.LLM.Complete(classCtx, messages, true)
 	if err != nil {
 		return failed
 	}

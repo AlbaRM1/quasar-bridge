@@ -21,6 +21,7 @@ import (
 
 	"quasarbridge/internal/assistant"
 	"quasarbridge/internal/bridge"
+	"quasarbridge/internal/dialogue"
 	"quasarbridge/internal/home"
 	"quasarbridge/internal/journal"
 	"quasarbridge/internal/llm"
@@ -123,7 +124,7 @@ func main() {
 	logs := new(journal.Writer)
 	lc := &llm.Client{BaseURL: cfg.LLMBaseURL, Model: cfg.LLMModel, APIKey: os.Getenv("QUASAR_LLM_API_KEY")}
 	hc := &home.Controller{Tools: &home.MCP{URL: os.Getenv("QUASAR_HOME_MCP_URL")}, Planner: lc}
-	engine := &bridge.Engine{LLM: lc, Home: hc}
+	engine := &bridge.Engine{LLM: lc, Home: hc, Dialogue: dialogue.New(cfg.DialogueContext)}
 	if cfg.AssistantTools.Enabled {
 		source := func() journal.Config {
 			c := logs.Config()
@@ -210,7 +211,7 @@ func main() {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		state := engine.RoutingStatus()
-		data, _ := json.Marshal(map[string]any{"status": "ok", "mode": cfg.Mode, "client_frames": clientCount.Load(), "server_frames": serverCount.Load(), "routing_revision": state.Revision, "routing_rules": state.ActiveRules, "conversation_log_enabled": logs.Enabled(), "conversation_log_failures": logs.Failures(), "assistant_tools_enabled": cfg.AssistantTools.Enabled})
+		data, _ := json.Marshal(map[string]any{"status": "ok", "mode": cfg.Mode, "client_frames": clientCount.Load(), "server_frames": serverCount.Load(), "routing_revision": state.Revision, "routing_rules": state.ActiveRules, "conversation_log_enabled": logs.Enabled(), "conversation_log_failures": logs.Failures(), "assistant_tools_enabled": cfg.AssistantTools.Enabled, "dialogue_context_enabled": cfg.DialogueContext.Enabled && cfg.Mode == "hybrid"})
 		_, _ = w.Write(data)
 	})
 	mux.Handle("/uni.ws", proxy)

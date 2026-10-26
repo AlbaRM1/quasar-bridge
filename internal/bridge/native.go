@@ -24,6 +24,7 @@ import (
 	server "github.com/freequasar/quasar-go-genproto/proto/alice/protos/api/alicekit/protocol/server"
 	"google.golang.org/protobuf/proto"
 
+	"quasarbridge/internal/dialogue"
 	"quasarbridge/internal/wire"
 )
 
@@ -70,6 +71,7 @@ type nativeRequest struct {
 	expires                         *time.Timer
 }
 type Native struct {
+	connectionScope  string
 	ctx              context.Context
 	cancel           context.CancelFunc
 	up, down         Sender
@@ -89,7 +91,7 @@ type Native struct {
 
 func NewNative(ctx context.Context, up, down Sender, resolver Resolver) *Native {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Native{ctx: ctx, cancel: cancel, up: up, down: down, resolver: resolver, requests: map[string]*nativeRequest{}, tts: map[string]*nativeRequest{}, streams: map[uint32]*nativeRequest{}, blocked: map[uint32]*nativeRequest{}}
+	return &Native{connectionScope: newID(), ctx: ctx, cancel: cancel, up: up, down: down, resolver: resolver, requests: map[string]*nativeRequest{}, tts: map[string]*nativeRequest{}, streams: map[uint32]*nativeRequest{}, blocked: map[uint32]*nativeRequest{}}
 }
 func (n *Native) Close() {
 	n.cancel()
@@ -140,7 +142,13 @@ func (n *Native) Client(ctx context.Context, k websocket.MessageType, data []byt
 		if id == "" {
 			return n.up(ctx, k, data)
 		}
-		pctx, cancel := context.WithTimeout(n.ctx, 90*time.Second)
+		scope := "connection:" + n.connectionScope
+		if id := req.GetApplication().GetDeviceId(); id != "" {
+			scope = "device:" + id
+		} else if id := req.GetApplication().GetUuid(); id != "" {
+			scope = "uuid:" + id
+		}
+		pctx, cancel := context.WithTimeout(dialogue.WithSpeaker(n.ctx, scope), 90*time.Second)
 		p := &nativeRequest{id: id, request: proto.Clone(req).(*request.TAliceRequestProto), text: req.GetRequest().GetEvent().GetText(), ctx: pctx, cancel: cancel}
 		p.header = proto.Clone(e.GetHeader()).(*header.TEventHeader)
 		p.isText = f.Kind() == "TextInput"
@@ -158,6 +166,11 @@ func (n *Native) Client(ctx context.Context, k websocket.MessageType, data []byt
 			n.mu.Unlock()
 			cancel()
 			return errors.New("too many pending native requests")
+		}
+		if preparer, ok := n.resolver.(interface {
+			Prepare(context.Context) context.Context
+		}); ok {
+			p.ctx = preparer.Prepare(p.ctx)
 		}
 		p.expires = time.AfterFunc(90*time.Second, func() {
 			n.mu.Lock()
@@ -431,6 +444,10 @@ func (n *Native) Server(ctx context.Context, k websocket.MessageType, data []byt
 				if p.ctx.Err() != nil {
 					return
 				}
+				if errors.Is(err, context.Canceled) {
+					n.discardStale(p)
+					return
+				}
 				if err != nil {
 					result.Answer = "Сейчас не получилось получить ответ локальной модели."
 				}
@@ -497,6 +514,7 @@ func (n *Native) maybeResolve(p *nativeRequest) {
 		if n.resolver != nil && strings.TrimSpace(text) != "" {
 			if routed, ok := n.resolver.(RoutedResolver); ok {
 				decision := routed.Decide(p.ctx, text)
+				slog.Info("native_route_decision", "request", requestTag(p.id), "route", decision.Route, "source", decision.Source)
 				stop := func() {}
 				if decision.Route != "yandex" && n.ProgressAfter > 0 {
 					stop = n.progress(p)
@@ -508,6 +526,10 @@ func (n *Native) maybeResolve(p *nativeRequest) {
 			}
 		}
 		if p.ctx.Err() != nil {
+			return
+		}
+		if errors.Is(err, context.Canceled) {
+			n.discardStale(p)
 			return
 		}
 		if err != nil {
@@ -647,4 +669,12 @@ func (n *Native) isRefusal(text string) bool {
 		return detector.IsRefusal(text)
 	}
 	return IsRefusal(text)
+}
+
+func (n *Native) discardStale(p *nativeRequest) {
+	n.mu.Lock()
+	p.canceled = true
+	p.cancel()
+	n.mu.Unlock()
+	_ = n.sendCancel(n.ctx, p.id)
 }

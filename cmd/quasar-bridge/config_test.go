@@ -126,3 +126,16 @@ func TestLocalProgressConfiguration(t *testing.T) {
 		}
 	}
 }
+
+func TestDialogueContextDefaultsAndValidation(t *testing.T) {
+	cfg, err := readConfig(configFile(t, `{"mode":"observe"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.DialogueContext.Enabled || cfg.DialogueContext.TTLSeconds != 300 || cfg.DialogueContext.MaxTurns != 6 {
+		t.Fatal("wrong dialogue defaults")
+	}
+	if _, err := readConfig(configFile(t, `{"mode":"observe","dialogue_context":{"max_turns":0}}`)); err == nil {
+		t.Fatal("invalid dialogue limit accepted")
+	}
+}

@@ -90,3 +90,64 @@ func TestExplicitWebURLIsReadBeforeFirstModelCall(t *testing.T) {
 		t.Fatalf("model=%d fetch=%d err=%v", modelCalls, fetches, err)
 	}
 }
+
+func TestYesterdayFollowupPrefetchesFreshHistory(t *testing.T) {
+	stamp := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "history.jsonl")
+	var rows []string
+	for _, tc := range []struct {
+		when time.Time
+		text string
+	}{{stamp.Add(-24 * time.Hour), "yesterday-marker"}, {stamp, "today-marker"}} {
+		raw, _ := json.Marshal(journal.Event{Time: tc.when, Session: "s", Request: tc.text, Event: "request", Text: tc.text})
+		rows = append(rows, string(raw))
+	}
+	os.WriteFile(path, []byte(strings.Join(rows, "\n")+"\n"), 0600)
+	cfg := DefaultConfig()
+	cfg.Timezone = "UTC"
+	source := journal.DefaultConfig()
+	source.Path = path
+	tools := &Tools{Config: cfg, JournalConfig: func() journal.Config { return source }, Now: func() time.Time { return stamp }}
+	agent := Agent{Tools: tools, MaxRounds: 2, MaxCalls: 3, Client: chatFunc(func(_ context.Context, m []llm.Message, _ []llm.Tool) (llm.Message, error) {
+		found := false
+		for _, msg := range m {
+			if msg.Role == "tool" && strings.Contains(msg.Content, "yesterday-marker") {
+				found = true
+				if strings.Contains(msg.Content, "today-marker") {
+					t.Error("today was included in yesterday selection")
+				}
+			}
+		}
+		if !found {
+			t.Error("yesterday history was not prefetched")
+		}
+		return llm.Message{Content: "Вчера обсуждали вчерашнюю тему"}, nil
+	})}
+	_, err := agent.Complete(t.Context(), []llm.Message{{Role: "user", Content: "о чём мы сегодня общались?"}, {Role: "assistant", Content: "Сегодня говорили о музыке"}, {Role: "user", Content: "а вчера?"}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLatestDateWinsOverEarlierFollowup(t *testing.T) {
+	now := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
+	cfg := DefaultConfig()
+	tools := &Tools{Config: cfg, Now: func() time.Time { return now }}
+	messages := []llm.Message{{Role: "user", Content: "о чём мы сегодня общались?"}, {Role: "assistant", Content: "Сегодня обсуждали музыку"}, {Role: "user", Content: "а вчера?"}, {Role: "assistant", Content: "Вчера обсуждали погоду"}, {Role: "user", Content: "а сегодня?"}}
+	found := false
+	for _, call := range tools.InitialCallsForConversation(messages) {
+		if call.Name == "search_history" {
+			found = true
+			var q HistoryQuery
+			if err := json.Unmarshal([]byte(call.Arguments), &q); err != nil {
+				t.Fatal(err)
+			}
+			if q.Since != "2026-10-26T00:00:00Z" || q.Until != "" {
+				t.Fatal("previous yesterday overrode current today", q)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("history topic lost across several followups")
+	}
+}

@@ -128,3 +128,34 @@ func TestHistoryPreventsWebExfiltrationInSameAndLaterBatch(t *testing.T) {
 		})
 	}
 }
+
+func TestPrivateHistoryBarrierSurvivesNextDialogueTurn(t *testing.T) {
+	tools := &privacyTools{}
+	calls := 0
+	a := Agent{Tools: tools, MaxRounds: 3, MaxCalls: 3, Client: chatFunc(func(_ context.Context, m []llm.Message, defs []llm.Tool) (llm.Message, error) {
+		calls++
+		if calls == 1 {
+			return llm.Message{ToolCalls: []llm.ToolCall{{ID: "h", Type: "function", Function: llm.FunctionCall{Name: "search_history", Arguments: `{"query":""}`}}}}, nil
+		}
+		if calls == 2 {
+			return llm.Message{Content: "private answer"}, nil
+		}
+		for _, d := range defs {
+			if d.Function.Name == "read_webpage" {
+				t.Error("network tool offered with private history in context")
+			}
+		}
+		if calls == 3 {
+			return llm.Message{ToolCalls: []llm.ToolCall{{ID: "w", Type: "function", Function: llm.FunctionCall{Name: "read_webpage", Arguments: `{"url":"https://example.org"}`}}}}, nil
+		}
+		return llm.Message{Content: "Cannot send history"}, nil
+	})}
+	_, private, err := a.CompleteDialogue(t.Context(), []llm.Message{{Role: "user", Content: "history"}}, false)
+	if err != nil || !private {
+		t.Fatal("private access not reported", err)
+	}
+	_, private, err = a.CompleteDialogue(t.Context(), []llm.Message{{Role: "user", Content: "history"}, {Role: "assistant", Content: "private answer"}, {Role: "user", Content: "открой сайт"}}, private)
+	if err != nil || !private || len(tools.calls) != 1 || tools.calls[0] != "search_history" {
+		t.Fatalf("private data could reach webpage: calls=%v err=%v", tools.calls, err)
+	}
+}
