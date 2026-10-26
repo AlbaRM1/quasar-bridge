@@ -167,3 +167,14 @@ func TestMCPExampleAndUnknownConfiguration(t *testing.T) {
 		t.Fatal("unknown MCP option accepted")
 	}
 }
+
+func TestReadConfigAcceptsSystemPrompt(t *testing.T) {
+	t.Setenv("QUASAR_SYSTEM_PROMPT", "Отвечай одной фразой.")
+	cfg, err := readConfig(configFile(t, `{"mode":"hybrid","llm_base_url":"https://llm.example.invalid/v1","llm_model":"test"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SystemPrompt != "Отвечай одной фразой." {
+		t.Fatalf("system prompt=%q", cfg.SystemPrompt)
+	}
+}

@@ -8,6 +8,7 @@
   "llm_base_url": "https://llm.example.invalid/v1",
   "llm_model": "your-model",
   "home_warm_area": "",
+  "system_prompt": "",
   "routing": {
     "rules": [
       {

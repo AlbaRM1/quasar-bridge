@@ -36,6 +36,7 @@ type config struct {
 	LLMModel        string               `json:"llm_model"`
 	HomeWarmArea    string               `json:"home_warm_area"`
 	Routing         bridge.RoutingConfig `json:"routing"`
+	SystemPrompt    string               `json:"system_prompt"`
 }
 
 func readConfig(path string) (config, error) {
@@ -52,6 +53,7 @@ func readConfig(path string) (config, error) {
 		"QUASAR_TLS_CERT": &cfg.TLSCert, "QUASAR_TLS_KEY": &cfg.TLSKey,
 		"QUASAR_MODE": &cfg.Mode, "QUASAR_LLM_BASE_URL": &cfg.LLMBaseURL,
 		"QUASAR_LLM_MODEL": &cfg.LLMModel, "QUASAR_HOME_WARM_AREA": &cfg.HomeWarmArea,
+		"QUASAR_SYSTEM_PROMPT": &cfg.SystemPrompt,
 	} {
 		if value, ok := os.LookupEnv(name); ok {
 			*target = value

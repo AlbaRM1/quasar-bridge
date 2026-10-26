@@ -111,7 +111,8 @@ chmod 600 config.json runtime.env
 - `mode`: `hybrid`;
 - `llm_base_url`: базовый URL API **с `/v1`, без `/chat/completions`**;
 - `llm_model`: точный идентификатор доступной модели;
-- `home_warm_area`: при необходимости имя области HA, например `Кабинет`.
+- `home_warm_area`: при необходимости имя области HA, например `Кабинет`;
+- `system_prompt`: свой системный промпт для ответов модели.
 
 Если API требует ключ, запишите его в `QUASAR_LLM_API_KEY` в `runtime.env`.
 Встроенная пара логин/пароль в URL не поддерживается.
@@ -122,6 +123,12 @@ chmod 600 config.json runtime.env
 `response_format={"type":"json_object"}`. Сервер API должен принимать эти
 параметры и возвращать `choices[0].message.content`; одного текстового
 completion API недостаточно. Прямой запрос LLM ограничен 60 секундами.
+
+Системный промпт ответов можно заменить своим: `system_prompt` в `config.json`
+или `QUASAR_SYSTEM_PROMPT` в окружении. Пустое значение оставляет встроенный
+промпт. Классификатор маршрутов и планировщик Home Assistant используют
+собственные инструкции и этой настройкой не меняются. Изменение требует
+перезапуска сервиса.
 
 ### Home Assistant MCP
 

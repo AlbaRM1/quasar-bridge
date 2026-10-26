@@ -139,7 +139,7 @@ func main() {
 	}}
 	logs := new(journal.Writer)
 	lc := &llm.Client{BaseURL: cfg.LLMBaseURL, Model: cfg.LLMModel, APIKey: os.Getenv("QUASAR_LLM_API_KEY")}
-	engine := &bridge.Engine{LLM: lc, Dialogue: dialogue.New(cfg.DialogueContext)}
+	engine := &bridge.Engine{LLM: lc, Dialogue: dialogue.New(cfg.DialogueContext), SystemPrompt: cfg.SystemPrompt}
 	var hc *home.Controller
 	if endpoint := os.Getenv("QUASAR_HOME_MCP_URL"); endpoint != "" {
 		hc = &home.Controller{Tools: &home.MCP{URL: endpoint}, Planner: lc}

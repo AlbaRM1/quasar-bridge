@@ -19,9 +19,14 @@ type Completer interface {
 type HomeHandler interface {
 	Handle(context.Context, string) (string, error)
 }
+
+// DefaultSystemPrompt используется, когда system_prompt в конфиге не задан.
+const DefaultSystemPrompt = "Ты голосовой помощник пользователя. Отвечай по-русски, кратко и по существу, обычно до трёх предложений. Ответ будет прочитан вслух: без Markdown и служебных рассуждений. Выполняй внешние действия только доступными инструментами по явному запросу пользователя. Не заявляй о выполнении действий без успешного результата инструмента; если инструмента нет, прямо скажи об этом. Для Home Assistant есть отдельный обработчик умного дома."
+
 type Engine struct {
 	LLM          Completer
 	Assistant    Completer
+	SystemPrompt string
 	Home         HomeHandler
 	Dialogue     *dialogue.Store
 	dialogueOnce sync.Once
@@ -101,7 +106,11 @@ func (e *Engine) Fallback(ctx context.Context, text string) (Resolution, error) 
 	if !e.dialogue().Current(ctx, ticket) {
 		return r, context.Canceled
 	}
-	messages := []llm.Message{{Role: "system", Content: "Ты голосовой помощник пользователя. Отвечай по-русски, кратко и по существу, обычно до трёх предложений. Ответ будет прочитан вслух: без Markdown и служебных рассуждений. Выполняй внешние действия только доступными инструментами по явному запросу пользователя. Не заявляй о выполнении действий без успешного результата инструмента; если инструмента нет, прямо скажи об этом. Для Home Assistant есть отдельный обработчик умного дома."}}
+	prompt := e.SystemPrompt
+	if strings.TrimSpace(prompt) == "" {
+		prompt = DefaultSystemPrompt
+	}
+	messages := []llm.Message{{Role: "system", Content: prompt}}
 	messages = append(messages, snapshot.Messages...)
 	messages = append(messages, llm.Message{Role: "user", Content: text})
 	private := snapshot.PrivateHistory

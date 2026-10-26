@@ -155,3 +155,27 @@ func TestHistoryQuestionNeverExecutesQuotedHomeCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestEngineUsesConfiguredSystemPrompt(t *testing.T) {
+	seen := ""
+	answer := func(_ context.Context, messages []llm.Message, _ bool) (string, error) {
+		for _, message := range messages {
+			if message.Role == "system" {
+				seen = message.Content
+			}
+		}
+		return "Ответ", nil
+	}
+	if _, err := (&Engine{SystemPrompt: "Свой промпт", LLM: completionFunc(answer)}).Resolve(t.Context(), "Напиши код сортировки"); err != nil {
+		t.Fatal(err)
+	}
+	if seen != "Свой промпт" {
+		t.Fatalf("custom prompt not used: %q", seen)
+	}
+	if _, err := (&Engine{LLM: completionFunc(answer)}).Resolve(t.Context(), "Напиши код сортировки"); err != nil {
+		t.Fatal(err)
+	}
+	if seen != DefaultSystemPrompt {
+		t.Fatalf("builtin prompt not used: %q", seen)
+	}
+}
