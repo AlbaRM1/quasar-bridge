@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import tomllib
@@ -12,8 +13,13 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 PAYLOAD = ("plugin.toml", "start.sh", "control.sh", "S98quasar-yam", "config.device.example.json")
 
-def build(output, binary=None):
+def build(output, binary=None, tag=None):
     manifest = tomllib.loads((ROOT / "packaging/yam/plugin.toml").read_text())
+    if tag is not None:
+        if not re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", tag):
+            raise ValueError("release tag must be vMAJOR.MINOR.PATCH (stable versions only)")
+        if tag[1:] != manifest["version"]:
+            raise ValueError("release tag does not match packaging/yam/plugin.toml version")
     output = Path(output or ROOT / f'dist/quasar-bridge-{manifest["version"]}-linux-arm64.yap').resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="quasar-yap-") as tmp:
@@ -43,5 +49,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output")
     parser.add_argument("--binary", help="prebuilt static Linux ARM64 executable")
+    parser.add_argument("--tag", help="require a stable vMAJOR.MINOR.PATCH tag matching plugin.toml")
     args = parser.parse_args()
-    build(args.output, args.binary)
+    build(args.output, args.binary, args.tag)

@@ -1,10 +1,20 @@
 name: checks
-on: [push, pull_request]
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_call:
+    inputs:
+      upload-yap:
+        description: Keep the tested YAM package for the release job
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -18,4 +28,21 @@ jobs:
       - run: go build -trimpath -o /tmp/quasar-bridge ./cmd/quasar-bridge
       - run: python3 scripts/test-yap.py
       - run: sh -n packaging/yam/start.sh packaging/yam/control.sh packaging/yam/S98quasar-yam
-      - run: python3 scripts/build-yap.py
+      - name: Build YAM package
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            python3 scripts/build-yap.py --tag "$GITHUB_REF_NAME"
+          else
+            python3 scripts/build-yap.py
+          fi
+      - name: Keep release assets
+        if: inputs.upload-yap
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: yap-release
+          path: |
+            dist/*.yap
+            dist/*.yap.sha256
+          if-no-files-found: error
+          retention-days: 7

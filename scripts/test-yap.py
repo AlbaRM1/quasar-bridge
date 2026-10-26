@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify package contract and persistent launcher state without speaker hardware."""
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,27 @@ builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 
 class PackageTest(unittest.TestCase):
+    def test_release_tag_must_match_manifest_before_building(self):
+        version = tomllib.loads((ROOT / "packaging/yam/plugin.toml").read_text())["version"]
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "release.yap"
+            missing_binary = Path(tmp) / "missing"
+            for tag in ("v999.0.0", version, "v01.2.3", "v1.2", "v1.2.3-rc.1", "v1.2.3\n"):
+                with self.subTest(tag=tag), self.assertRaisesRegex(ValueError, "release tag"):
+                    builder.build(output, missing_binary, tag=tag)
+                self.assertFalse(output.exists())
+
+    def test_matching_tag_produces_named_package_and_checksum(self):
+        version = tomllib.loads((ROOT / "packaging/yam/plugin.toml").read_text())["version"]
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "arm64"
+            binary.write_bytes(b"\x7fELF\x02" + bytes(13) + b"\xb7\x00" + bytes(44))
+            output = Path(tmp) / f"quasar-bridge-{version}-linux-arm64.yap"
+            package = builder.build(output, binary, tag="v" + version)
+            checksum = package.with_suffix(".yap.sha256").read_text().split()
+            self.assertEqual(checksum[1], output.name)
+            self.assertEqual(checksum[0], hashlib.sha256(package.read_bytes()).hexdigest())
+
     def test_payload_and_persistent_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
