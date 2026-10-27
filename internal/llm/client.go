@@ -38,11 +38,13 @@ type Function struct {
 	Parameters  map[string]any `json:"parameters"`
 }
 type Client struct {
-	BaseURL   string
-	Model     string
-	APIKey    string
-	HTTP      *http.Client
-	ExtraBody map[string]any
+	BaseURL     string
+	Model       string
+	APIKey      string
+	HTTP        *http.Client
+	ExtraBody   map[string]any
+	Temperature float64
+	MaxTokens   int
 }
 
 func (c *Client) Complete(ctx context.Context, messages []Message, structured bool) (string, error) {
@@ -61,7 +63,16 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []Tool) (Me
 func (c *Client) chat(ctx context.Context, messages []Message, structured bool, tools []Tool) (Message, error) {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	request := map[string]any{"model": c.Model, "messages": messages, "stream": false, "max_tokens": 1024, "temperature": 0, "chat_template_kwargs": map[string]any{"enable_thinking": false}}
+	maxTokens := c.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 1024
+	}
+	// Классификатор и план Home Assistant должны оставаться детерминированными.
+	temperature := 0.0
+	if !structured && c.Temperature > 0 {
+		temperature = c.Temperature
+	}
+	request := map[string]any{"model": c.Model, "messages": messages, "stream": false, "max_tokens": maxTokens, "temperature": temperature, "chat_template_kwargs": map[string]any{"enable_thinking": false}}
 	if len(tools) > 0 {
 		request["tools"] = tools
 		request["tool_choice"] = "auto"

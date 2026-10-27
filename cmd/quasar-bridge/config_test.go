@@ -206,3 +206,25 @@ func TestReadConfigNormalizesEmptyExtraBody(t *testing.T) {
 		t.Fatalf("empty extra body kept: %v", cfg.LLMExtraBody)
 	}
 }
+
+func TestReadConfigValidatesLLMTuning(t *testing.T) {
+	base := `{"mode":"hybrid","llm_base_url":"https://llm.example.invalid/v1","llm_model":"test"}`
+	cfg, err := readConfig(configFile(t, `{"mode":"hybrid","llm_base_url":"https://llm.example.invalid/v1","llm_model":"test","llm_temperature":1.2,"llm_max_tokens":1536}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LLMTemperature != 1.2 || cfg.LLMMaxTokens != 1536 {
+		t.Fatalf("tuning lost: %+v", cfg)
+	}
+	_ = base
+	for _, body := range []string{
+		`{"mode":"hybrid","llm_base_url":"https://llm.example.invalid/v1","llm_model":"test","llm_temperature":3}`,
+		`{"mode":"hybrid","llm_base_url":"https://llm.example.invalid/v1","llm_model":"test","llm_temperature":-1}`,
+		`{"mode":"hybrid","llm_base_url":"https://llm.example.invalid/v1","llm_model":"test","llm_max_tokens":16}`,
+		`{"mode":"hybrid","llm_base_url":"https://llm.example.invalid/v1","llm_model":"test","llm_max_tokens":9000}`,
+	} {
+		if _, err := readConfig(configFile(t, body)); err == nil {
+			t.Fatalf("invalid tuning accepted: %s", body)
+		}
+	}
+}

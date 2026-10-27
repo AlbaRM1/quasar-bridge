@@ -39,6 +39,8 @@ type config struct {
 	SystemPrompt     string               `json:"system_prompt"`
 	ListenAfterReply *bool                `json:"listen_after_reply"`
 	LLMExtraBody     map[string]any       `json:"llm_extra_body"`
+	LLMTemperature   float64              `json:"llm_temperature"`
+	LLMMaxTokens     int                  `json:"llm_max_tokens"`
 }
 
 func readConfig(path string) (config, error) {
@@ -126,6 +128,12 @@ func readConfig(path string) (config, error) {
 	}
 	if _, err := bridge.CompileRouting(cfg.Routing); err != nil {
 		return cfg, err
+	}
+	if cfg.LLMTemperature < 0 || cfg.LLMTemperature > 2 {
+		return cfg, errors.New("llm_temperature must be between 0 and 2")
+	}
+	if cfg.LLMMaxTokens != 0 && (cfg.LLMMaxTokens < 64 || cfg.LLMMaxTokens > 8192) {
+		return cfg, errors.New("llm_max_tokens must be between 64 and 8192")
 	}
 	return cfg, nil
 }

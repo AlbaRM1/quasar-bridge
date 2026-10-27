@@ -169,3 +169,34 @@ func TestReasoningContentIsEchoedBackToThinkingProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestTemperatureAppliesToAnswersOnly(t *testing.T) {
+	bodies := []map[string]any{}
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.UnmarshalRead(r.Body, &body); err != nil {
+			t.Error(err)
+			http.Error(w, "bad", 400)
+			return
+		}
+		bodies = append(bodies, body)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer s.Close()
+	c := Client{BaseURL: s.URL, Model: "fixture", Temperature: 1.2, MaxTokens: 2048}
+	if _, err := c.Complete(t.Context(), []Message{{Role: "user", Content: "привет"}}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Complete(t.Context(), []Message{{Role: "user", Content: "route?"}}, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("requests=%d", len(bodies))
+	}
+	if bodies[0]["temperature"] != 1.2 || bodies[0]["max_tokens"] != float64(2048) {
+		t.Fatalf("answer request lost settings: %+v", bodies[0])
+	}
+	if bodies[1]["temperature"] != float64(0) {
+		t.Fatalf("structured request must stay deterministic: %+v", bodies[1])
+	}
+}
